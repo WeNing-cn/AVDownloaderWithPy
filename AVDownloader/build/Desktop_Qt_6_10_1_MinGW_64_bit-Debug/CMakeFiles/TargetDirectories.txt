@@ -1,9 +1,0 @@
-C:/CODE/QTS/Projects/AVDownloader/AVDownloaderWithQTCpp/AVDownloader/build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/CMakeFiles/AVDownloader.dir
-C:/CODE/QTS/Projects/AVDownloader/AVDownloaderWithQTCpp/AVDownloader/build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/CMakeFiles/edit_cache.dir
-C:/CODE/QTS/Projects/AVDownloader/AVDownloaderWithQTCpp/AVDownloader/build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/CMakeFiles/rebuild_cache.dir
-C:/CODE/QTS/Projects/AVDownloader/AVDownloaderWithQTCpp/AVDownloader/build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/CMakeFiles/list_install_components.dir
-C:/CODE/QTS/Projects/AVDownloader/AVDownloaderWithQTCpp/AVDownloader/build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/CMakeFiles/install.dir
-C:/CODE/QTS/Projects/AVDownloader/AVDownloaderWithQTCpp/AVDownloader/build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/CMakeFiles/install/local.dir
-C:/CODE/QTS/Projects/AVDownloader/AVDownloaderWithQTCpp/AVDownloader/build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/CMakeFiles/install/strip.dir
-C:/CODE/QTS/Projects/AVDownloader/AVDownloaderWithQTCpp/AVDownloader/build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/CMakeFiles/AVDownloader_autogen_timestamp_deps.dir
-C:/CODE/QTS/Projects/AVDownloader/AVDownloaderWithQTCpp/AVDownloader/build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/CMakeFiles/AVDownloader_autogen.dir
