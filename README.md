@@ -1,2 +1,2 @@
-# AVDownloaderWithQTCpp
-使用QT开发的网站视频下载工具
+# AVDownloader
+使用py开发的网站视频下载工具
