@@ -1,0 +1,29 @@
+# 项目依赖库
+
+# GUI界面
+PyQt5==5.15.10
+
+# 网络请求
+requests==2.31.0
+
+# HTML解析
+beautifulsoup4==4.12.2
+
+# 视频处理
+ffmpeg-python==0.2.0
+
+# 工具库
+tqdm==4.66.1
+
+# 浏览器自动化
+selenium==4.15.2
+
+# 加密解密
+pycryptodome==3.23.0
+
+# 打包工具
+pyinstaller==6.3.0
+
+# 其他
+urllib3==2.1.0
+idna==3.6
