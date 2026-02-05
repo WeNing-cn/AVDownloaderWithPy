@@ -339,51 +339,58 @@ class MainWindow(QMainWindow):
         font.setPointSize(10)
         self.setFont(font)
         
-        # 初始化模块
-        print("正在初始化浏览器模拟器...")
-        self.browser = SyncBrowserSimulator()
-        print("浏览器模拟器初始化完成")
-        
-        print("正在初始化视频检测器...")
-        self.detector = VideoDetector()
-        print("视频检测器初始化完成")
-        
-        print("正在初始化视频下载器...")
-        self.downloader = VideoDownloader()
-        print("视频下载器初始化完成")
-        
-        print("正在初始化TS合并器...")
-        self.ts_merger = TSMerger()
-        print("TS合并器初始化完成")
-        
         # 状态变量
         self.current_url = ""
         self.download_path = r"C:\index"
         self.video_items = []
         self.worker_thread = None
         
-        # 初始化UI
+        # 初始化UI（必须先初始化UI，因为log方法依赖于self.console）
         print("正在初始化用户界面...")
         self.init_ui()
         print("用户界面初始化完成")
         
+        # 初始化模块
+        self.log("正在初始化浏览器模拟器...", "INFO")
+        self.browser = SyncBrowserSimulator()
+        self.log("浏览器模拟器初始化完成", "INFO")
+        
+        self.log("正在初始化视频检测器...", "INFO")
+        self.detector = VideoDetector()
+        self.log("视频检测器初始化完成", "INFO")
+        
+        self.log("正在初始化视频下载器...", "INFO")
+        self.downloader = VideoDownloader()
+        self.log("视频下载器初始化完成", "INFO")
+        
+        self.log("正在初始化TS合并器...", "INFO")
+        self.ts_merger = TSMerger()
+        self.log("TS合并器初始化完成", "INFO")
+        
+        self.log(f"默认下载路径: {self.download_path}", "DEBUG")
+        
         # 检测临时文件
+        self.log("正在检测临时文件...", "INFO")
         self.check_temp_files()
         
         # 日志
-        self.log("程序初始化完成")
+        self.log("程序初始化完成", "INFO")
+        self.log("所有模块初始化成功，程序已准备就绪", "INFO")
     
     def check_temp_files(self):
         """
         检测临时目录中是否有剩余文件
         """
         try:
+            self.log("正在获取临时子目录...", "DEBUG")
             subdirs = self.ts_merger.get_temp_subdirs()
             
             if subdirs:
-                self.log(f"检测到 {len(subdirs)} 个临时下载目录")
+                self.log(f"检测到 {len(subdirs)} 个临时下载目录", "INFO")
+                self.log(f"临时目录列表: {subdirs}", "DEBUG")
                 
                 # 显示对话框
+                self.log("显示临时文件处理对话框", "INFO")
                 dialog = TempFilesDialog(subdirs, self)
                 result = dialog.exec_()
                 
@@ -393,27 +400,35 @@ class MainWindow(QMainWindow):
                     
                     if action == 'delete' and selected_subdir:
                         # 删除选中的子目录
-                        self.log(f"删除临时目录: {selected_subdir}")
+                        self.log(f"删除临时目录: {selected_subdir}", "INFO")
+                        self.log(f"删除目录: {selected_subdir}", "DEBUG")
                         success = self.ts_merger.delete_temp_subdir(selected_subdir)
                         if success:
                             QMessageBox.information(self, "成功", f"临时目录已删除: {selected_subdir}")
+                            self.log(f"临时目录删除成功: {selected_subdir}", "INFO")
                         else:
                             QMessageBox.warning(self, "失败", f"删除临时目录失败: {selected_subdir}")
+                            self.log(f"临时目录删除失败: {selected_subdir}", "ERROR")
                     
                     elif action == 'clear_all':
                         # 清空所有临时目录
-                        self.log("清空所有临时目录")
+                        self.log("清空所有临时目录", "INFO")
+                        self.log(f"将清空 {len(subdirs)} 个临时目录", "DEBUG")
                         success = self.ts_merger.clear_temp_dir()
                         if success:
                             QMessageBox.information(self, "成功", "所有临时目录已清空")
+                            self.log("所有临时目录清空成功", "INFO")
                         else:
                             QMessageBox.warning(self, "失败", "清空临时目录失败")
+                            self.log("清空临时目录失败", "ERROR")
                     
                     elif selected_subdir:
                         # 合并选中的子目录
-                        self.log(f"合并临时目录: {selected_subdir}")
+                        self.log(f"合并临时目录: {selected_subdir}", "INFO")
+                        self.log(f"合并目录: {selected_subdir}", "DEBUG")
                         
                         # 检查是否需要解密
+                        self.log("询问是否需要解密", "INFO")
                         reply = QMessageBox.question(
                             self, 
                             "是否需要解密", 
@@ -423,6 +438,7 @@ class MainWindow(QMainWindow):
                         
                         if reply == QMessageBox.Yes:
                             # 需要解密，询问M3U8 URL
+                            self.log("用户选择需要解密，询问M3U8 URL", "INFO")
                             m3u8_url, ok = QInputDialog.getText(
                                 self,
                                 "输入M3U8 URL",
@@ -431,6 +447,7 @@ class MainWindow(QMainWindow):
                             )
                             
                             if ok and m3u8_url:
+                                self.log(f"用户提供了M3U8 URL: {m3u8_url}", "DEBUG")
                                 # 询问输出文件名
                                 output_filename, ok = QFileDialog.getSaveFileName(
                                     self,
@@ -440,7 +457,9 @@ class MainWindow(QMainWindow):
                                 )
                                 
                                 if ok:
+                                    self.log(f"用户选择了输出文件: {output_filename}", "DEBUG")
                                     # 启动工作线程进行解密和合并
+                                    self.log("启动工作线程进行解密和合并", "INFO")
                                     def decrypt_and_merge():
                                         from decrypt_existing import decrypt_existing_ts_files
                                         result = decrypt_existing_ts_files(
@@ -455,6 +474,7 @@ class MainWindow(QMainWindow):
                                     self.worker_thread.start()
                         else:
                             # 不需要解密，直接合并
+                            self.log("用户选择不需要解密，直接合并", "INFO")
                             # 询问输出文件名
                             output_filename, ok = QFileDialog.getSaveFileName(
                                 self,
@@ -464,7 +484,9 @@ class MainWindow(QMainWindow):
                             )
                             
                             if ok:
+                                self.log(f"用户选择了输出文件: {output_filename}", "DEBUG")
                                 # 启动工作线程进行合并
+                                self.log("启动工作线程进行合并", "INFO")
                                 def merge_existing():
                                     result = self.ts_merger.merge_existing_ts_files(
                                         selected_subdir,
@@ -477,20 +499,30 @@ class MainWindow(QMainWindow):
                                 self.worker_thread.start()
             
             else:
-                self.log("没有检测到临时文件")
+                self.log("没有检测到临时文件", "INFO")
         
         except Exception as e:
-            self.log(f"检测临时文件失败: {e}")
+            self.log(f"检测临时文件失败: {e}", "ERROR")
+            import traceback
+            self.log(f"错误详情: {traceback.format_exc()}", "ERROR")
     
     def on_merge_finished(self, result):
         """
         合并完成回调
         """
         if result:
-            self.log("临时文件合并成功")
-            QMessageBox.information(self, "成功", "临时文件合并成功")
+            if isinstance(result, dict) and result.get('success'):
+                output_path = result.get('output_path', '')
+                filename = os.path.basename(output_path) if output_path else "未知文件"
+                self.log(f"临时文件合并成功: {filename}", "INFO")
+                if output_path:
+                    self.log(f"合并后的文件路径: {output_path}", "DEBUG")
+                QMessageBox.information(self, "成功", "临时文件合并成功")
+            else:
+                self.log("临时文件合并成功", "INFO")
+                QMessageBox.information(self, "成功", "临时文件合并成功")
         else:
-            self.log("临时文件合并失败")
+            self.log("临时文件合并失败", "ERROR")
             QMessageBox.warning(self, "失败", "临时文件合并失败")
     
     def init_ui(self):
@@ -600,14 +632,28 @@ class MainWindow(QMainWindow):
         progress_group.setLayout(progress_layout)
         main_layout.addWidget(progress_group)
     
-    def log(self, message):
+    def log(self, message, level="INFO"):
         """
         输出日志到控制台
+        
+        Args:
+            message: 日志消息
+            level: 日志级别，可选值：INFO, WARNING, ERROR, DEBUG
         """
         timestamp = utils.get_datetime()
-        log_message = f"[{timestamp}] {message}\n"
+        # 根据日志级别设置不同的颜色
+        level_colors = {
+            "INFO": "#000000",  # 黑色
+            "WARNING": "#FF8C00",  # 橙色
+            "ERROR": "#FF0000",  # 红色
+            "DEBUG": "#006400"   # 深绿色
+        }
+        color = level_colors.get(level, "#000000")
+        log_message = f"<font color='{color}'>[{timestamp}] [{level}] {message}</font>\n"
         self.console.append(log_message)
         self.console.verticalScrollBar().setValue(self.console.verticalScrollBar().maximum())
+        # 同时输出到控制台
+        print(f"[{timestamp}] [{level}] {message}")
     
     def browse_path(self):
         """
@@ -617,7 +663,8 @@ class MainWindow(QMainWindow):
         if path:
             self.download_path = path
             self.path_input.setText(path)
-            self.log(f"保存路径已设置为: {path}")
+            self.log(f"保存路径已设置为: {path}", "INFO")
+            self.log(f"新的保存路径: {path}", "DEBUG")
     
     def start_detection(self):
         """
@@ -646,9 +693,12 @@ class MainWindow(QMainWindow):
         self.download_button.setEnabled(False)
         
         # 显示状态
-        self.log(f"====================================")
-        self.log(f"开始探测视频资源: {url}")
-        self.log(f"====================================")
+        self.log("====================================", "INFO")
+        self.log(f"开始探测视频资源: {url}", "INFO")
+        self.log(f"目标URL: {url}", "DEBUG")
+        self.log(f"保存路径: {self.download_path}", "DEBUG")
+        self.log("====================================", "INFO")
+        self.log("[步骤1/4] 正在初始化浏览器...", "INFO")
         self.progress_label.setText("正在初始化浏览器...")
         self.progress_bar.setValue(0)
         
@@ -656,35 +706,44 @@ class MainWindow(QMainWindow):
         def detect_videos():
             try:
                 # 初始化浏览器
-                print("[步骤1/4] 正在初始化浏览器...")
+                self.log("[步骤1/4] 正在初始化浏览器...", "INFO")
+                self.log("正在创建浏览器实例...", "DEBUG")
                 self.browser.init_browser()
-                print("[步骤1/4] 浏览器初始化完成")
+                self.log("[步骤1/4] 浏览器初始化完成", "INFO")
+                self.log("浏览器实例创建成功", "DEBUG")
                 
                 # 加载页面
-                print(f"[步骤2/4] 正在加载页面: {url}")
+                self.log(f"[步骤2/4] 正在加载页面: {url}", "INFO")
+                self.log(f"请求URL: {url}", "DEBUG")
                 success = self.browser.load_page(url)
                 if not success:
-                    print("[步骤2/4] 页面加载失败")
+                    self.log("[步骤2/4] 页面加载失败", "ERROR")
+                    self.log("页面可能无法访问或网络连接失败", "ERROR")
                     return {'success': False, 'error': '页面加载失败，请检查网络连接或URL是否正确'}
-                print("[步骤2/4] 页面加载完成")
+                self.log("[步骤2/4] 页面加载完成", "INFO")
+                self.log("页面加载成功", "DEBUG")
                 
                 # 获取页面内容
-                print("[步骤3/4] 正在获取页面内容...")
+                self.log("[步骤3/4] 正在获取页面内容...", "INFO")
                 html = self.browser.get_page_content()
                 if not html:
-                    print("[步骤3/4] 无法获取页面内容")
+                    self.log("[步骤3/4] 无法获取页面内容", "ERROR")
+                    self.log("页面内容为空或获取失败", "ERROR")
                     return {'success': False, 'error': '无法获取页面内容，请检查网络连接'}
-                print(f"[步骤3/4] 页面内容获取完成，大小: {len(html)} 字符")
+                self.log(f"[步骤3/4] 页面内容获取完成，大小: {len(html)} 字符", "INFO")
+                self.log(f"页面内容长度: {len(html)} 字符", "DEBUG")
                 
                 # 探测视频资源（使用browser中的video_resources，已经过滤为只包含m3u8和key关键词）
-                print("[步骤4/4] 正在探测视频资源...")
+                self.log("[步骤4/4] 正在探测视频资源...", "INFO")
+                self.log("正在分析页面内容，提取视频链接...", "DEBUG")
                 videos = self.browser.get_video_resources()
-                print(f"[步骤4/4] 视频资源探测完成，找到 {len(videos)} 个资源")
+                self.log(f"[步骤4/4] 视频资源探测完成，找到 {len(videos)} 个资源", "INFO")
+                self.log(f"找到 {len(videos)} 个视频资源", "DEBUG")
                 
                 # 关闭浏览器
-                print("正在关闭浏览器...")
+                self.log("正在关闭浏览器...", "INFO")
                 self.browser.close()
-                print("浏览器已关闭")
+                self.log("浏览器已关闭", "INFO")
                 
                 return {'success': True, 'videos': videos}
             except Exception as e:
@@ -693,9 +752,10 @@ class MainWindow(QMainWindow):
                     self.browser.close()
                 except:
                     pass
-                print(f"[错误] 探测过程中发生错误: {str(e)}")
+                self.log(f"[错误] 探测过程中发生错误: {str(e)}", "ERROR")
                 import traceback
-                print(f"[错误详情] {traceback.format_exc()}")
+                error_detail = traceback.format_exc()
+                self.log(f"[错误详情] {error_detail}", "ERROR")
                 return {'success': False, 'error': f'探测过程中发生错误: {str(e)}'}
         
         # 启动线程
@@ -712,27 +772,32 @@ class MainWindow(QMainWindow):
         
         if result['success']:
             videos = result.get('videos', [])
-            self.log(f"探测完成，找到 {len(videos)} 个视频资源")
+            self.log(f"探测完成，找到 {len(videos)} 个视频资源", "INFO")
+            self.log(f"视频资源数量: {len(videos)}", "DEBUG")
             
             # 添加到视频列表
-            for video in videos:
+            for i, video in enumerate(videos):
                 item = VideoItem(video)
                 self.video_list.addItem(item)
                 self.video_items.append(item)
+                self.log(f"添加视频资源 {i+1}: {video.get('url', '')}", "DEBUG")
             
             # 启用下载按钮
             if videos:
                 self.download_button.setEnabled(True)
                 self.progress_label.setText(f"找到 {len(videos)} 个视频资源")
+                self.log("下载按钮已启用", "INFO")
             else:
                 self.progress_label.setText("未找到视频资源")
+                self.log("未找到视频资源", "WARNING")
         else:
             error = result.get('error', '未知错误')
-            self.log(f"探测失败: {error}")
+            self.log(f"探测失败: {error}", "ERROR")
             self.progress_label.setText("探测失败")
             QMessageBox.critical(self, "错误", f"探测失败: {error}")
         
         self.progress_bar.setValue(100)
+        self.log("探测任务完成", "INFO")
     
     def download_selected_video(self):
         """
@@ -756,9 +821,11 @@ class MainWindow(QMainWindow):
         self.start_button.setEnabled(False)
         
         # 显示状态
-        self.log(f"====================================")
-        self.log(f"开始下载视频: {video_url}")
-        self.log(f"====================================")
+        self.log("====================================", "INFO")
+        self.log(f"开始下载视频: {video_url}", "INFO")
+        self.log(f"视频URL: {video_url}", "DEBUG")
+        self.log(f"保存路径: {self.download_path}", "DEBUG")
+        self.log("====================================", "INFO")
         self.progress_label.setText("正在准备下载...")
         self.progress_bar.setValue(0)
         
@@ -768,15 +835,17 @@ class MainWindow(QMainWindow):
                 # 检查是否为M3U8播放列表
                 if self.ts_merger.is_m3u8_url(video_url):
                     # 使用TS合并器下载
-                    print("[模式] 检测到M3U8播放列表，使用TS分片合并模式")
+                    self.log("[模式] 检测到M3U8播放列表，使用TS分片合并模式", "INFO")
+                    self.log("将使用并行下载和自动合并功能", "DEBUG")
                     
                     # 定义进度回调函数
                     def progress_callback(percentage, downloaded, total):
                         # 发射进度更新信号
                         self.worker_thread.progress_updated.emit(percentage, downloaded, total)
                     
-                    print(f"[准备] 目标URL: {video_url}")
-                    print(f"[准备] 保存路径: {self.download_path}")
+                    self.log(f"[准备] 目标URL: {video_url}", "INFO")
+                    self.log(f"[准备] 保存路径: {self.download_path}", "INFO")
+                    self.log(f"M3U8 URL: {video_url}", "DEBUG")
                     
                     result = self.ts_merger.download_and_merge(
                         video_url,
@@ -785,15 +854,17 @@ class MainWindow(QMainWindow):
                     )
                 else:
                     # 使用普通下载器
-                    print("[模式] 使用普通视频下载模式")
+                    self.log("[模式] 使用普通视频下载模式", "INFO")
+                    self.log("将直接下载完整视频文件", "DEBUG")
                     
                     # 定义进度回调函数
                     def progress_callback(percentage, downloaded, total):
                         # 发射进度更新信号
                         self.worker_thread.progress_updated.emit(percentage, downloaded, total)
                     
-                    print(f"[准备] 目标URL: {video_url}")
-                    print(f"[准备] 保存路径: {self.download_path}")
+                    self.log(f"[准备] 目标URL: {video_url}", "INFO")
+                    self.log(f"[准备] 保存路径: {self.download_path}", "INFO")
+                    self.log(f"视频URL: {video_url}", "DEBUG")
                     
                     result = self.downloader.download_video(
                         video_url,
@@ -803,9 +874,10 @@ class MainWindow(QMainWindow):
                 
                 return result
             except Exception as e:
-                print(f"[错误] 下载过程中发生错误: {str(e)}")
+                self.log(f"[错误] 下载过程中发生错误: {str(e)}", "ERROR")
                 import traceback
-                print(f"[错误详情] {traceback.format_exc()}")
+                error_detail = traceback.format_exc()
+                self.log(f"[错误详情] {error_detail}", "ERROR")
                 return {'success': False, 'error': str(e)}
         
         # 启动线程
@@ -829,25 +901,30 @@ class MainWindow(QMainWindow):
         # 启用按钮
         self.download_button.setEnabled(True)
         self.start_button.setEnabled(True)
+        self.log("按钮已重新启用", "INFO")
         
         if result['success']:
             file_path = result.get('file_path', '')
             filename = result.get('filename', '')
             file_size = result.get('size', 0)
             
-            self.log(f"下载完成: {filename}")
-            self.log(f"保存路径: {file_path}")
-            self.log(f"文件大小: {utils.format_file_size(file_size)}")
+            self.log(f"下载完成: {filename}", "INFO")
+            self.log(f"保存路径: {file_path}", "INFO")
+            self.log(f"文件大小: {utils.format_file_size(file_size)}", "INFO")
+            self.log(f"文件名: {filename}", "DEBUG")
+            self.log(f"文件路径: {file_path}", "DEBUG")
+            self.log(f"文件大小: {file_size} 字节", "DEBUG")
             
             self.progress_label.setText("下载完成")
             QMessageBox.information(self, "成功", f"视频下载完成！\n保存路径: {file_path}")
         else:
             error = result.get('error', '未知错误')
-            self.log(f"下载失败: {error}")
+            self.log(f"下载失败: {error}", "ERROR")
             self.progress_label.setText("下载失败")
             QMessageBox.critical(self, "错误", f"下载失败: {error}")
         
         self.progress_bar.setValue(100)
+        self.log("下载任务完成", "INFO")
     
     def clear_all(self):
         """
@@ -855,65 +932,73 @@ class MainWindow(QMainWindow):
         """
         # 清空网址输入框
         self.url_input.clear()
+        self.log("已清空URL输入框", "INFO")
         
         # 清空控制台输出
         self.console.clear()
+        self.log("已清空控制台输出", "INFO")
         
         # 清空视频列表
         self.video_list.clear()
         self.video_items = []
+        self.log("已清空视频列表", "INFO")
         
         # 重置进度条和状态
         self.progress_bar.setValue(0)
         self.progress_label.setText("就绪")
+        self.log("已重置进度条和状态", "INFO")
         
         # 禁用下载按钮
         self.download_button.setEnabled(False)
+        self.log("已禁用下载按钮", "INFO")
         
         # 确保开始按钮是可用的
         self.start_button.setEnabled(True)
+        self.log("已确保开始按钮可用", "INFO")
         
         # 记录操作
-        self.log("已清空所有输入和输出")
+        self.log("已清空所有输入和输出", "INFO")
     
     def closeEvent(self, event):
         """
         关闭窗口事件
         """
-        print("[关闭] 正在关闭程序...")
+        self.log("[关闭] 正在关闭程序...", "INFO")
         
         # 停止所有下载器
-        print("[关闭] 正在停止下载器...")
+        self.log("[关闭] 正在停止下载器...", "INFO")
         try:
             if hasattr(self, 'downloader') and self.downloader:
                 self.downloader.stop()
+                self.log("[关闭] 下载器已停止", "INFO")
         except Exception as e:
-            print(f"[关闭] 停止下载器时出错: {e}")
+            self.log(f"[关闭] 停止下载器时出错: {e}", "ERROR")
         
         # 停止TS合并器
         try:
             if hasattr(self, 'ts_merger') and self.ts_merger:
                 self.ts_merger.stop()
+                self.log("[关闭] TS合并器已停止", "INFO")
         except Exception as e:
-            print(f"[关闭] 停止TS合并器时出错: {e}")
+            self.log(f"[关闭] 停止TS合并器时出错: {e}", "ERROR")
         
         # 停止工作线程
         if self.worker_thread and self.worker_thread.isRunning():
-            print("[关闭] 正在停止工作线程...")
+            self.log("[关闭] 正在停止工作线程...", "INFO")
             self.worker_thread.stop()
             self.worker_thread.quit()
             self.worker_thread.wait(timeout=3000)  # 等待最多3秒
-            print("[关闭] 工作线程已停止")
+            self.log("[关闭] 工作线程已停止", "INFO")
         
         # 确保浏览器关闭
         try:
-            print("[关闭] 正在关闭浏览器...")
+            self.log("[关闭] 正在关闭浏览器...", "INFO")
             self.browser.close()
-            print("[关闭] 浏览器已关闭")
+            self.log("[关闭] 浏览器已关闭", "INFO")
         except Exception as e:
-            print(f"[关闭] 关闭浏览器时出错: {e}")
+            self.log(f"[关闭] 关闭浏览器时出错: {e}", "ERROR")
         
-        print("[关闭] 程序已关闭")
+        self.log("[关闭] 程序已关闭", "INFO")
         event.accept()
 
 if __name__ == "__main__":
