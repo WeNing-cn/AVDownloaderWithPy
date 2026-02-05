@@ -264,7 +264,7 @@ class BrowserSimulator:
     
     def _is_video_url(self, url: str) -> bool:
         """
-        检查URL是否为视频资源（只检查m3u8和key关键词）
+        检查URL是否为视频资源（检查m3u8、key和getmovie关键词）
         """
         url_lower = url.lower()
         
@@ -276,8 +276,8 @@ class BrowserSimulator:
         if any(domain in url_lower for domain in ['cloudflareinsights.com', 'bdimg.com', 'google-analytics.com', 'googletagmanager.com']):
             return False
         
-        # 只检查m3u8和key关键词
-        if 'm3u8' in url_lower or 'key' in url_lower:
+        # 检查m3u8、key和getmovie关键词
+        if 'm3u8' in url_lower or 'key' in url_lower or 'getmovie' in url_lower:
             return True
         
         return False
@@ -289,7 +289,7 @@ class BrowserSimulator:
         try:
             soup = BeautifulSoup(self.page_content, 'html.parser')
             
-            # 提取video标签（只保留包含m3u8或key的链接）
+            # 提取video标签（只保留包含m3u8、key或getmovie的链接）
             for video_tag in soup.find_all('video'):
                 if video_tag.get('src'):
                     video_url = video_tag['src']
@@ -297,8 +297,8 @@ class BrowserSimulator:
                         from urllib.parse import urljoin
                         video_url = urljoin(base_url, video_url)
                     
-                    # 只保留包含m3u8或key的链接
-                    if 'm3u8' in video_url.lower() or 'key' in video_url.lower():
+                    # 只保留包含m3u8、key或getmovie的链接
+                    if 'm3u8' in video_url.lower() or 'key' in video_url.lower() or 'getmovie' in video_url.lower():
                         if not any(v['url'] == video_url for v in self.video_resources):
                             self.video_resources.append({
                                 'url': video_url,
@@ -310,7 +310,7 @@ class BrowserSimulator:
                             })
                             print(f"  从video标签提取: {video_url}")
                 
-                # 提取source标签（只保留包含m3u8或key的链接）
+                # 提取source标签（只保留包含m3u8、key或getmovie的链接）
                 for source_tag in video_tag.find_all('source'):
                     if source_tag.get('src'):
                         video_url = source_tag['src']
@@ -318,8 +318,8 @@ class BrowserSimulator:
                             from urllib.parse import urljoin
                             video_url = urljoin(base_url, video_url)
                         
-                        # 只保留包含m3u8或key的链接
-                        if 'm3u8' in video_url.lower() or 'key' in video_url.lower():
+                        # 只保留包含m3u8、key或getmovie的链接
+                        if 'm3u8' in video_url.lower() or 'key' in video_url.lower() or 'getmovie' in video_url.lower():
                             if not any(v['url'] == video_url for v in self.video_resources):
                                 self.video_resources.append({
                                     'url': video_url,
@@ -331,7 +331,7 @@ class BrowserSimulator:
                                 })
                                 print(f"  从source标签提取: {video_url}")
             
-            # 提取iframe标签（只保留包含m3u8或key的链接）
+            # 提取iframe标签（只保留包含m3u8、key或getmovie的链接）
             for iframe_tag in soup.find_all('iframe'):
                 if iframe_tag.get('src'):
                     iframe_url = iframe_tag['src']
@@ -343,8 +343,8 @@ class BrowserSimulator:
                     if any(ext in iframe_url.lower() for ext in ['.js', '.css', '.html', '.php']):
                         continue
                     
-                    # 只保留包含m3u8或key的iframe
-                    if 'm3u8' in iframe_url.lower() or 'key' in iframe_url.lower():
+                    # 只保留包含m3u8、key或getmovie的iframe
+                    if 'm3u8' in iframe_url.lower() or 'key' in iframe_url.lower() or 'getmovie' in iframe_url.lower():
                         if not any(v['url'] == iframe_url for v in self.video_resources):
                             self.video_resources.append({
                                 'url': iframe_url,
@@ -370,7 +370,7 @@ class BrowserSimulator:
     
     def _extract_video_from_js(self, base_url: str) -> None:
         """
-        从JavaScript代码中提取视频链接（只提取m3u8和key关键词）
+        从JavaScript代码中提取视频链接（提取m3u8、key和getmovie关键词）
         """
         try:
             # 提取可能的M3U8播放列表
@@ -402,6 +402,48 @@ class BrowserSimulator:
                         'timestamp': 0
                     })
                     print(f"  从JavaScript提取key链接: {key_url}")
+            
+            # 提取可能的getmovie链接
+            getmovie_pattern = re.compile(r'https?://[^\s"\']+[\w\-./?%&=]*getmovie[\w\-./?%&=]*', re.IGNORECASE)
+            for match in getmovie_pattern.finditer(self.page_content):
+                getmovie_url = match.group(0)
+                if not any(v['url'] == getmovie_url for v in self.video_resources):
+                    self.video_resources.append({
+                        'url': getmovie_url,
+                        'type': 'regex',
+                        'source': 'html',
+                        'content_type': 'application/json',
+                        'status': 200,
+                        'timestamp': 0
+                    })
+                    print(f"  从JavaScript提取getmovie链接: {getmovie_url}")
+            
+            # 提取可能的JSON格式的getmovie数据
+            json_pattern = re.compile(r'\{[^\}]*getmovie[^\}]*\}', re.IGNORECASE)
+            for match in json_pattern.finditer(self.page_content):
+                try:
+                    json_str = match.group(0)
+                    import json
+                    json_data = json.loads(json_str)
+                    if 'm3u8' in json_data:
+                        m3u8_path = json_data['m3u8']
+                        if not m3u8_path.startswith('http'):
+                            m3u8_url = urljoin(base_url, m3u8_path)
+                        else:
+                            m3u8_url = m3u8_path
+                        if not any(v['url'] == m3u8_url for v in self.video_resources):
+                            self.video_resources.append({
+                                'url': m3u8_url,
+                                'type': 'json',
+                                'source': 'html',
+                                'content_type': 'application/x-mpegURL',
+                                'status': 200,
+                                'timestamp': 0,
+                                'getmovie_data': json_data
+                            })
+                            print(f"  从JSON提取M3U8链接: {m3u8_url}")
+                except Exception as e:
+                    print(f"  解析JSON失败: {e}")
                     
         except Exception as e:
             print(f"从JavaScript提取视频链接失败: {e}")
@@ -423,9 +465,9 @@ class BrowserSimulator:
             if any(domain in url.lower() for domain in ['cloudflareinsights.com', 'bdimg.com', 'google-analytics.com', 'googletagmanager.com']):
                 continue
             
-            # 只保留包含m3u8和key关键词的文件
+            # 只保留包含m3u8、key和getmovie关键词的文件
             url_lower = url.lower()
-            if 'm3u8' in url_lower or 'key' in url_lower:
+            if 'm3u8' in url_lower or 'key' in url_lower or 'getmovie' in url_lower:
                 filtered_resources.append(resource)
         
         self.video_resources = filtered_resources

@@ -331,15 +331,42 @@ class TSMerger:
             if encryption_info['key_url']:
                 print("下载加密密钥...")
                 try:
-                    key_response = requests.get(
-                        encryption_info['key_url'],
-                        headers=enhanced_headers,
-                        timeout=30,
-                        verify=False
-                    )
-                    key_response.raise_for_status()
-                    encryption_info['key'] = key_response.content
-                    print(f"密钥下载成功，长度: {len(encryption_info['key'])} 字节")
+                    # 检查是否需要使用本地getmovie.key文件
+                    if 'getmovie' in m3u8_url.lower() or 'custom_key' in encryption_info['key_url'].lower():
+                        # 尝试使用resource目录中的getmovie.key文件
+                        import os
+                        current_dir = os.path.dirname(os.path.abspath(__file__))
+                        resource_dir = os.path.join(current_dir, '..', 'Resources')
+                        key_file_path = os.path.join(resource_dir, 'getmovie.key')
+                        
+                        if os.path.exists(key_file_path):
+                            with open(key_file_path, 'r', encoding='utf-8') as f:
+                                key_content = f.read().strip()
+                                encryption_info['key'] = key_content.encode('ascii')
+                                print(f"使用resource目录的getmovie.key文件，长度: {len(encryption_info['key'])} 字节")
+                                print(f"密钥内容: {key_content}")
+                        else:
+                            # 尝试正常下载密钥
+                            key_response = requests.get(
+                                encryption_info['key_url'],
+                                headers=enhanced_headers,
+                                timeout=30,
+                                verify=False
+                            )
+                            key_response.raise_for_status()
+                            encryption_info['key'] = key_response.content
+                            print(f"密钥下载成功，长度: {len(encryption_info['key'])} 字节")
+                    else:
+                        # 正常下载密钥
+                        key_response = requests.get(
+                            encryption_info['key_url'],
+                            headers=enhanced_headers,
+                            timeout=30,
+                            verify=False
+                        )
+                        key_response.raise_for_status()
+                        encryption_info['key'] = key_response.content
+                        print(f"密钥下载成功，长度: {len(encryption_info['key'])} 字节")
                 except Exception as e:
                     print(f"下载密钥失败: {e}")
                     encryption_info['key'] = None
@@ -826,6 +853,18 @@ class TSMerger:
             # 4. 清理临时子目录
             print(f"清理临时目录: {temp_subdir}")
             self.delete_temp_subdir(temp_subdir)
+            
+            # 清理key文件（如果存在）
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            resource_dir = os.path.join(current_dir, '..', 'Resources')
+            key_file_path = os.path.join(resource_dir, 'getmovie.key')
+            
+            if os.path.exists(key_file_path):
+                try:
+                    os.remove(key_file_path)
+                    print(f"已删除resource目录中的key文件: {key_file_path}")
+                except Exception as e:
+                    print(f"删除key文件失败: {e}")
             
             # 5. 返回结果
             return {

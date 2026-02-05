@@ -832,8 +832,51 @@ class MainWindow(QMainWindow):
         # 启动工作线程
         def download_video():
             try:
+                # 检查是否为getmovie链接
+                if 'getmovie' in video_url.lower():
+                    # 处理getmovie链接
+                    self.log("[模式] 检测到getmovie链接，使用特殊处理模式", "INFO")
+                    self.log("将获取JSON数据并提取M3U8链接", "DEBUG")
+                    
+                    # 获取getmovie JSON数据
+                    import requests
+                    import json
+                    response = requests.get(video_url, timeout=30)
+                    response.raise_for_status()
+                    json_data = response.json()
+                    
+                    if 'm3u8' in json_data:
+                        m3u8_path = json_data['m3u8']
+                        # 构造完整的M3U8 URL
+                        from urllib.parse import urljoin
+                        m3u8_url = urljoin(video_url, m3u8_path)
+                        
+                        self.log(f"[解析] 从getmovie JSON中提取到M3U8路径: {m3u8_path}", "INFO")
+                        self.log(f"[构造] 完整的M3U8 URL: {m3u8_url}", "INFO")
+                        
+                        # 使用TS合并器下载
+                        self.log("[模式] 检测到M3U8播放列表，使用TS分片合并模式", "INFO")
+                        self.log("将使用并行下载和自动合并功能", "DEBUG")
+                        
+                        # 定义进度回调函数
+                        def progress_callback(percentage, downloaded, total):
+                            # 发射进度更新信号
+                            self.worker_thread.progress_updated.emit(percentage, downloaded, total)
+                        
+                        self.log(f"[准备] 目标URL: {m3u8_url}", "INFO")
+                        self.log(f"[准备] 保存路径: {self.download_path}", "INFO")
+                        self.log(f"M3U8 URL: {m3u8_url}", "DEBUG")
+                        
+                        result = self.ts_merger.download_and_merge(
+                            m3u8_url,
+                            self.download_path,
+                            progress_callback=progress_callback
+                        )
+                    else:
+                        self.log("[错误] getmovie JSON中没有找到m3u8字段", "ERROR")
+                        return {'success': False, 'error': 'getmovie JSON中没有找到m3u8字段'}
                 # 检查是否为M3U8播放列表
-                if self.ts_merger.is_m3u8_url(video_url):
+                elif self.ts_merger.is_m3u8_url(video_url):
                     # 使用TS合并器下载
                     self.log("[模式] 检测到M3U8播放列表，使用TS分片合并模式", "INFO")
                     self.log("将使用并行下载和自动合并功能", "DEBUG")

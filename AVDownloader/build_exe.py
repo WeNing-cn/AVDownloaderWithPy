@@ -44,11 +44,11 @@ def build_exe():
         "--noconfirm",  # 覆盖输出目录
         "--add-data=video_downloader.py;.",  # 添加依赖模块
         "--add-data=video_detector.py;.",
-        "--add-data=video_downloader.py;.",
         "--add-data=ts_merger.py;.",
         "--add-data=browser_simulator.py;.",
         "--add-data=utils.py;.",
         "--add-data=decrypt_existing.py;.",
+        "--add-data=../example;example",  # 添加example目录
         "--hidden-import=PyQt5",
         "--hidden-import=PyQt5.QtCore",
         "--hidden-import=PyQt5.QtWidgets",
