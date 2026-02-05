@@ -10,6 +10,12 @@
 
 使用Python开发的网站视频下载工具，支持对网站动态视频资源的爬取与本地保存功能，特别支持M3U8播放列表的TS分片自动合并。
 
+Zip下载:
+- 为了方便用户使用，我们提供了打包好的可执行文件（AVDownloader.exe）
+- 您可以直接下载并运行该文件，无需安装任何依赖
+- 请确保您的计算机满足系统要求（Windows 10及以上版本）
+链接：https://github.com/WeNing-cn/AVDownloaderWithPy/raw/refs/heads/main/AVDownloader/zipped/AVD.zip
+
 ## 项目结构
 
 ```
