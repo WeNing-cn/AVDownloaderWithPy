@@ -2,10 +2,10 @@
 
 
 a = Analysis(
-    ['C:\\CODE\\QTS\\Projects\\AVDownloader\\AVDownloaderWithQTCpp\\avdownloader\\main.py'],
+    ['C:\\CODE\\QTS\\Projects\\AVDownloader\\AVDownloaderWithQTCpp\\AVDownloader\\main.py'],
     pathex=[],
     binaries=[],
-    datas=[('video_downloader.py', '.'), ('video_detector.py', '.'), ('ts_merger.py', '.'), ('browser_simulator.py', '.'), ('utils.py', '.'), ('decrypt_existing.py', '.'), ('../example', 'example')],
+    datas=[('video_downloader.py', '.'), ('video_detector.py', '.'), ('ts_merger.py', '.'), ('browser_simulator.py', '.'), ('utils.py', '.'), ('decrypt_existing.py', '.')],
     hiddenimports=['PyQt5', 'PyQt5.QtCore', 'PyQt5.QtWidgets', 'PyQt5.QtGui', 'requests', 'beautifulsoup4', 'selenium', 'tqdm', 'pycryptodome', 'Crypto', 'Crypto.Cipher', 'Crypto.Cipher.AES', 'Crypto.Util.Padding'],
     hookspath=[],
     hooksconfig={},

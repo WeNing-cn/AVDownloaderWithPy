@@ -364,7 +364,7 @@ class MainWindow(QMainWindow):
         self.log("视频下载器初始化完成", "INFO")
         
         self.log("正在初始化TS合并器...", "INFO")
-        self.ts_merger = TSMerger()
+        self.ts_merger = TSMerger(log_callback=self.log)
         self.log("TS合并器初始化完成", "INFO")
         
         self.log(f"默认下载路径: {self.download_path}", "DEBUG")

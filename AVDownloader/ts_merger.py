@@ -19,7 +19,7 @@ except ImportError:
     print("可以使用: pip install pycryptodome")
 
 class TSMerger:
-    def __init__(self):
+    def __init__(self, log_callback=None):
         self.downloader = VideoDownloader()
         self.max_workers = 8  # 并行下载线程数
         self.chunk_size = 1024 * 1024  # 1MB
@@ -34,24 +34,39 @@ class TSMerger:
         self.should_stop = False
         # 添加ffmpeg进程跟踪
         self.ffmpeg_process = None
+        # 日志回调函数
+        self.log_callback = log_callback
         # 调试信息
-        print(f"当前工作目录: {os.getcwd()}")
-        print(f"系统PATH环境变量: {os.environ.get('PATH', '')}")
-        print(f"ffmpeg路径配置: {self.ffmpeg_path}")
-        print(f"临时目录: {self.temp_dir}")
+        self.log(f"当前工作目录: {os.getcwd()}")
+        self.log(f"系统PATH环境变量: {os.environ.get('PATH', '')}")
+        self.log(f"ffmpeg路径配置: {self.ffmpeg_path}")
+        self.log(f"临时目录: {self.temp_dir}")
         # 尝试验证ffmpeg
         try:
             import subprocess
             result = subprocess.run([self.ffmpeg_path, '-version'], capture_output=True, text=True)
-            print(f"ffmpeg版本检查: {'成功' if result.returncode == 0 else '失败'}")
+            self.log(f"ffmpeg版本检查: {'成功' if result.returncode == 0 else '失败'}")
         except Exception as e:
-            print(f"验证ffmpeg失败: {e}")
+            self.log(f"验证ffmpeg失败: {e}")
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': '*/*',
             'Accept-Language': 'zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3',
             'Connection': 'keep-alive'
         }
+    
+    def log(self, message, level="INFO"):
+        """
+        输出日志
+        
+        Args:
+            message: 日志消息
+            level: 日志级别
+        """
+        if self.log_callback:
+            self.log_callback(message, level)
+        else:
+            print(f"[{level}] {message}")
     
     def stop(self):
         """
@@ -286,13 +301,14 @@ class TSMerger:
                 
                 # 处理加密信息
                 if line.startswith('#EXT-X-KEY:'):
-                    print(f"发现加密信息: {line}")
+                    self.log(f"[M3U8解析] 发现加密信息: {line}")
                     # 解析加密信息
                     key_info = line[len('#EXT-X-KEY:'):].strip()
                     # 提取METHOD
                     if 'METHOD=' in key_info:
                         method_match = key_info.split('METHOD=')[1].split(',')[0].strip('"\'')
                         encryption_info['method'] = method_match
+                        self.log(f"[M3U8解析] 加密方法: {method_match}")
                     # 提取KEY URL
                     if 'URI=' in key_info:
                         import re
@@ -303,14 +319,14 @@ class TSMerger:
                             if not key_url.startswith('http'):
                                 key_url = self._normalize_url(key_url, response.url)
                             encryption_info['key_url'] = key_url
-                            print(f"密钥URL: {key_url}")
+                            self.log(f"[M3U8解析] 密钥URL: {key_url}")
                     # 提取IV
                     if 'IV=' in key_info:
                         import re
                         iv_match = re.search(r'IV=0x([0-9A-Fa-f]+)', key_info)
                         if iv_match:
                             encryption_info['iv'] = iv_match.group(1)
-                            print(f"初始化向量: {encryption_info['iv']}")
+                            self.log(f"[M3U8解析] 初始化向量: {encryption_info['iv']}")
                 
                 # 跳过注释和空行
                 if not line or line.startswith('#'):
@@ -329,7 +345,7 @@ class TSMerger:
             
             # 如果找到加密密钥URL，下载密钥
             if encryption_info['key_url']:
-                print("下载加密密钥...")
+                self.log("[密钥处理] 开始处理加密密钥...")
                 try:
                     # 检查是否需要使用本地getmovie.key文件
                     if 'getmovie' in m3u8_url.lower() or 'custom_key' in encryption_info['key_url'].lower():
@@ -343,10 +359,13 @@ class TSMerger:
                             with open(key_file_path, 'r', encoding='utf-8') as f:
                                 key_content = f.read().strip()
                                 encryption_info['key'] = key_content.encode('ascii')
-                                print(f"使用resource目录的getmovie.key文件，长度: {len(encryption_info['key'])} 字节")
-                                print(f"密钥内容: {key_content}")
+                                self.log(f"[密钥处理] 使用resource目录的getmovie.key文件")
+                                self.log(f"[密钥处理] 密钥长度: {len(encryption_info['key'])} 字节")
+                                self.log(f"[密钥处理] 解密方法: 使用本地密钥文件")
                         else:
                             # 尝试正常下载密钥
+                            self.log(f"[密钥处理] resource目录中未找到getmovie.key文件，尝试从网络下载")
+                            self.log(f"[密钥处理] 密钥URL: {encryption_info['key_url']}")
                             key_response = requests.get(
                                 encryption_info['key_url'],
                                 headers=enhanced_headers,
@@ -355,9 +374,13 @@ class TSMerger:
                             )
                             key_response.raise_for_status()
                             encryption_info['key'] = key_response.content
-                            print(f"密钥下载成功，长度: {len(encryption_info['key'])} 字节")
+                            self.log(f"[密钥处理] 密钥下载成功")
+                            self.log(f"[密钥处理] 密钥长度: {len(encryption_info['key'])} 字节")
+                            self.log(f"[密钥处理] 解密方法: 使用网络下载的密钥")
                     else:
                         # 正常下载密钥
+                        self.log(f"[密钥处理] 从网络下载密钥")
+                        self.log(f"[密钥处理] 密钥URL: {encryption_info['key_url']}")
                         key_response = requests.get(
                             encryption_info['key_url'],
                             headers=enhanced_headers,
@@ -366,10 +389,15 @@ class TSMerger:
                         )
                         key_response.raise_for_status()
                         encryption_info['key'] = key_response.content
-                        print(f"密钥下载成功，长度: {len(encryption_info['key'])} 字节")
+                        self.log(f"[密钥处理] 密钥下载成功")
+                        self.log(f"[密钥处理] 密钥长度: {len(encryption_info['key'])} 字节")
+                        self.log(f"[密钥处理] 解密方法: 使用网络下载的密钥")
                 except Exception as e:
-                    print(f"下载密钥失败: {e}")
+                    self.log(f"[密钥处理] 下载密钥失败: {e}", "ERROR")
                     encryption_info['key'] = None
+            else:
+                self.log("[密钥处理] 未发现加密密钥URL，视频未加密")
+                self.log("[密钥处理] 解密方法: 无需解密")
             
             # 如果找到TS分片，直接返回
             if ts_urls:
@@ -604,7 +632,9 @@ class TSMerger:
         try:
             # 检查是否有TS分片
             if not ts_files:
-                print("错误: 没有可合并的TS分片")
+                error_message = "错误: 没有可合并的TS分片"
+                self.log(error_message, "ERROR")
+                print(error_message)
                 return False
             
             # 检查所有TS文件是否存在
@@ -614,7 +644,9 @@ class TSMerger:
                     missing_files.append(ts_file)
             
             if missing_files:
-                print(f"错误: 以下TS文件不存在: {missing_files}")
+                error_message = f"错误: 以下TS文件不存在: {missing_files}"
+                self.log(error_message, "ERROR")
+                print(error_message)
                 return False
             
             # 确保输出目录存在
@@ -626,16 +658,23 @@ class TSMerger:
             with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
                 for ts_file in ts_files:
                     # 使用正斜杠，避免ffmpeg中的转义字符问题
-                    ts_file_normalized = ts_file.replace('\\', '/')
+                    ts_file_normalized = ts_file.replace(os.sep, '/')
                     # 打印文件路径以便调试
-                    print(f"添加TS文件到列表: {ts_file_normalized}")
+                    debug_message = f"添加TS文件到列表: {ts_file_normalized}"
+                    self.log(debug_message, "DEBUG")
+                    print(debug_message)
                     f.write(f"file '{ts_file_normalized}'\n")
                 ts_list_file = f.name
             
             # 打印临时文件列表内容以便调试
-            print(f"临时文件列表路径: {ts_list_file}")
+            debug_message = f"临时文件列表路径: {ts_list_file}"
+            self.log(debug_message, "DEBUG")
+            print(debug_message)
             with open(ts_list_file, 'r', encoding='utf-8') as f:
-                print(f"临时文件列表内容:\n{f.read()}")
+                list_content = f.read()
+                debug_message = f"临时文件列表内容:\n{list_content}"
+                self.log(debug_message, "DEBUG")
+                print(debug_message)
             
             # 再次检查所有TS文件是否存在，确保文件没有被删除或移动
             missing_files = []
@@ -644,7 +683,9 @@ class TSMerger:
                     missing_files.append(ts_file)
             
             if missing_files:
-                print(f"错误: 以下TS文件不存在: {missing_files}")
+                error_message = f"错误: 以下TS文件不存在: {missing_files}"
+                self.log(error_message, "ERROR")
+                print(error_message)
                 try:
                     os.remove(ts_list_file)
                 except:
@@ -664,14 +705,17 @@ class TSMerger:
             ]
             
             # 打印命令以便于调试
-            print(f"执行ffmpeg命令: {' '.join(cmd)}")
+            debug_message = f"执行ffmpeg命令: {' '.join(cmd)}"
+            self.log(debug_message, "DEBUG")
+            print(debug_message)
             
             # 执行命令
             try:
                 # 使用Popen以便能够跟踪和终止进程
                 self.ffmpeg_process = subprocess.Popen(
                     cmd,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True
                 )
                 
@@ -683,7 +727,9 @@ class TSMerger:
                 while self.ffmpeg_process.poll() is None:
                     # 检查是否应该停止
                     if self.should_stop:
-                        print("[合并] 收到停止信号，终止ffmpeg进程")
+                        stop_message = "[合并] 收到停止信号，终止ffmpeg进程"
+                        self.log(stop_message, "INFO")
+                        print(stop_message)
                         try:
                             self.ffmpeg_process.terminate()
                             # 等待进程终止
@@ -695,7 +741,9 @@ class TSMerger:
                     
                     # 检查是否超时
                     if time.time() - start_time > timeout:
-                        print("[合并] ffmpeg执行超时")
+                        timeout_message = "[合并] ffmpeg执行超时"
+                        self.log(timeout_message, "ERROR")
+                        print(timeout_message)
                         try:
                             self.ffmpeg_process.terminate()
                             self.ffmpeg_process.wait(timeout=5)
@@ -712,7 +760,9 @@ class TSMerger:
                 self.ffmpeg_process = None
                 
             except FileNotFoundError:
-                print("错误: 找不到ffmpeg命令，请确保ffmpeg已安装并添加到系统PATH环境变量中")
+                error_message = "错误: 找不到ffmpeg命令，请确保ffmpeg已安装并添加到系统PATH环境变量中"
+                self.log(error_message, "ERROR")
+                print(error_message)
                 print("可以从 https://ffmpeg.org/download.html 下载ffmpeg")
                 try:
                     os.remove(ts_list_file)
@@ -720,7 +770,9 @@ class TSMerger:
                     pass
                 return False
             except Exception as e:
-                print(f"执行ffmpeg命令时出错: {e}")
+                error_message = f"执行ffmpeg命令时出错: {e}"
+                self.log(error_message, "ERROR")
+                print(error_message)
                 try:
                     if self.ffmpeg_process:
                         self.ffmpeg_process.terminate()
@@ -736,20 +788,31 @@ class TSMerger:
             
             # 检查执行结果
             if result.returncode != 0:
-                print(f"ffmpeg合并失败 (返回码: {result.returncode})")
-                print(f"标准输出: {result.stdout}")
-                print(f"标准错误: {result.stderr}")
+                error_message = f"ffmpeg合并失败 (返回码: {result.returncode})"
+                stdout_message = f"标准输出: {result.stdout}"
+                stderr_message = f"标准错误: {result.stderr}"
+                
+                self.log(error_message, "ERROR")
+                self.log(stdout_message, "ERROR")
+                self.log(stderr_message, "ERROR")
+                
+                print(error_message)
+                print(stdout_message)
+                print(stderr_message)
                 try:
                     os.remove(ts_list_file)
                 except:
                     pass
                 return False
             
-            print(f"ffmpeg合并成功: {output_file}")
+            success_message = f"ffmpeg合并成功: {output_file}"
+            self.log(success_message, "INFO")
+            print(success_message)
             return True
-            
         except Exception as e:
-            print(f"合并TS分片失败: {e}")
+            error_message = f"合并TS分片失败: {e}"
+            self.log(error_message, "ERROR")
+            print(error_message)
             return False
         finally:
             # 清理临时文件
@@ -809,11 +872,21 @@ class TSMerger:
                     'temp_subdir': temp_subdir
                 }
             
-            print(f"找到 {len(ts_urls)} 个TS分片")
+            self.log(f"[M3U8解析] 找到 {len(ts_urls)} 个TS分片")
             if encryption_info['method'] != 'NONE':
-                print(f"检测到加密流，加密方法: {encryption_info['method']}")
+                self.log(f"[加密检测] 视频已加密")
+                self.log(f"[加密检测] 加密方法: {encryption_info['method']}")
                 if encryption_info['key']:
-                    print(f"已获取解密密钥")
+                    self.log(f"[加密检测] 已获取解密密钥")
+                    if 'getmovie' in m3u8_url.lower():
+                        self.log(f"[加密检测] 解密方式: 使用Resource目录中的getmovie.key文件")
+                    else:
+                        self.log(f"[加密检测] 解密方式: 使用网络下载的密钥")
+                else:
+                    self.log(f"[加密检测] 未获取到解密密钥，解密可能失败", "WARNING")
+            else:
+                self.log(f"[加密检测] 视频未加密，无需解密")
+                self.log(f"[加密检测] 解密方式: 无需解密")
             
             # 2. 下载TS分片到临时目录
             print(f"开始下载TS分片到临时目录: {temp_subdir}")

@@ -48,7 +48,7 @@ def build_exe():
         "--add-data=browser_simulator.py;.",
         "--add-data=utils.py;.",
         "--add-data=decrypt_existing.py;.",
-        "--add-data=../example;example",  # 添加example目录
+
         "--hidden-import=PyQt5",
         "--hidden-import=PyQt5.QtCore",
         "--hidden-import=PyQt5.QtWidgets",
