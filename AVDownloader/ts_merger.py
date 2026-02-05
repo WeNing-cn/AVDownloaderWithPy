@@ -32,6 +32,8 @@ class TSMerger:
         self.ffmpeg_path = self._find_ffmpeg()
         # 添加停止标志
         self.should_stop = False
+        # 添加ffmpeg进程跟踪
+        self.ffmpeg_process = None
         # 调试信息
         print(f"当前工作目录: {os.getcwd()}")
         print(f"系统PATH环境变量: {os.environ.get('PATH', '')}")
@@ -639,12 +641,49 @@ class TSMerger:
             
             # 执行命令
             try:
-                result = subprocess.run(
+                # 使用Popen以便能够跟踪和终止进程
+                self.ffmpeg_process = subprocess.Popen(
                     cmd,
                     capture_output=True,
-                    text=True,
-                    timeout=300  # 5分钟超时
+                    text=True
                 )
+                
+                # 定期检查是否应该停止
+                import time
+                start_time = time.time()
+                timeout = 300  # 5分钟超时
+                
+                while self.ffmpeg_process.poll() is None:
+                    # 检查是否应该停止
+                    if self.should_stop:
+                        print("[合并] 收到停止信号，终止ffmpeg进程")
+                        try:
+                            self.ffmpeg_process.terminate()
+                            # 等待进程终止
+                            self.ffmpeg_process.wait(timeout=5)
+                        except:
+                            pass
+                        self.ffmpeg_process = None
+                        return False
+                    
+                    # 检查是否超时
+                    if time.time() - start_time > timeout:
+                        print("[合并] ffmpeg执行超时")
+                        try:
+                            self.ffmpeg_process.terminate()
+                            self.ffmpeg_process.wait(timeout=5)
+                        except:
+                            pass
+                        self.ffmpeg_process = None
+                        return False
+                    
+                    # 短暂休眠，避免CPU占用过高
+                    time.sleep(0.1)
+                
+                # 获取执行结果
+                result = self.ffmpeg_process
+                self.ffmpeg_process = None
+                
             except FileNotFoundError:
                 print("错误: 找不到ffmpeg命令，请确保ffmpeg已安装并添加到系统PATH环境变量中")
                 print("可以从 https://ffmpeg.org/download.html 下载ffmpeg")
@@ -653,8 +692,15 @@ class TSMerger:
                 except:
                     pass
                 return False
-            except subprocess.TimeoutExpired:
-                print("错误: ffmpeg执行超时")
+            except Exception as e:
+                print(f"执行ffmpeg命令时出错: {e}")
+                try:
+                    if self.ffmpeg_process:
+                        self.ffmpeg_process.terminate()
+                        self.ffmpeg_process.wait(timeout=5)
+                        self.ffmpeg_process = None
+                except:
+                    pass
                 try:
                     os.remove(ts_list_file)
                 except:

@@ -963,43 +963,70 @@ class MainWindow(QMainWindow):
         """
         关闭窗口事件
         """
-        self.log("[关闭] 正在关闭程序...", "INFO")
-        
-        # 停止所有下载器
-        self.log("[关闭] 正在停止下载器...", "INFO")
-        try:
-            if hasattr(self, 'downloader') and self.downloader:
-                self.downloader.stop()
-                self.log("[关闭] 下载器已停止", "INFO")
-        except Exception as e:
-            self.log(f"[关闭] 停止下载器时出错: {e}", "ERROR")
-        
-        # 停止TS合并器
-        try:
-            if hasattr(self, 'ts_merger') and self.ts_merger:
-                self.ts_merger.stop()
-                self.log("[关闭] TS合并器已停止", "INFO")
-        except Exception as e:
-            self.log(f"[关闭] 停止TS合并器时出错: {e}", "ERROR")
-        
-        # 停止工作线程
-        if self.worker_thread and self.worker_thread.isRunning():
-            self.log("[关闭] 正在停止工作线程...", "INFO")
-            self.worker_thread.stop()
-            self.worker_thread.quit()
-            self.worker_thread.wait(timeout=3000)  # 等待最多3秒
-            self.log("[关闭] 工作线程已停止", "INFO")
-        
-        # 确保浏览器关闭
-        try:
-            self.log("[关闭] 正在关闭浏览器...", "INFO")
-            self.browser.close()
-            self.log("[关闭] 浏览器已关闭", "INFO")
-        except Exception as e:
-            self.log(f"[关闭] 关闭浏览器时出错: {e}", "ERROR")
-        
-        self.log("[关闭] 程序已关闭", "INFO")
+        # 立即接受事件，避免UI阻塞
         event.accept()
+        
+        # 在新线程中执行关闭操作，避免阻塞主线程
+        import threading
+        def close_operation():
+            try:
+                print("[关闭] 正在关闭程序...")
+                
+                # 停止TS合并器（优先级最高，因为它可能有ffmpeg进程）
+                print("[关闭] 正在停止TS合并器...")
+                try:
+                    if hasattr(self, 'ts_merger') and self.ts_merger:
+                        # 直接设置停止标志
+                        self.ts_merger.should_stop = True
+                        # 尝试终止可能的ffmpeg进程
+                        if hasattr(self.ts_merger, 'ffmpeg_process'):
+                            try:
+                                self.ts_merger.ffmpeg_process.terminate()
+                                print("[关闭] ffmpeg进程已终止")
+                            except:
+                                pass
+                        print("[关闭] TS合并器已停止")
+                except Exception as e:
+                    print(f"[关闭] 停止TS合并器时出错: {e}")
+                
+                # 停止下载器
+                print("[关闭] 正在停止下载器...")
+                try:
+                    if hasattr(self, 'downloader') and self.downloader:
+                        self.downloader.stop()
+                        print("[关闭] 下载器已停止")
+                except Exception as e:
+                    print(f"[关闭] 停止下载器时出错: {e}")
+                
+                # 停止工作线程
+                if hasattr(self, 'worker_thread') and self.worker_thread and self.worker_thread.isRunning():
+                    print("[关闭] 正在停止工作线程...")
+                    try:
+                        self.worker_thread.stop()
+                        self.worker_thread.quit()
+                        # 使用较短的超时时间，避免阻塞
+                        self.worker_thread.wait(timeout=1000)  # 等待最多1秒
+                        print("[关闭] 工作线程已停止")
+                    except Exception as e:
+                        print(f"[关闭] 停止工作线程时出错: {e}")
+                
+                # 确保浏览器关闭
+                print("[关闭] 正在关闭浏览器...")
+                try:
+                    if hasattr(self, 'browser') and self.browser:
+                        self.browser.close()
+                        print("[关闭] 浏览器已关闭")
+                except Exception as e:
+                    print(f"[关闭] 关闭浏览器时出错: {e}")
+                
+                print("[关闭] 程序已关闭")
+            except Exception as e:
+                print(f"[关闭] 关闭操作时出错: {e}")
+        
+        # 启动关闭操作线程
+        close_thread = threading.Thread(target=close_operation)
+        close_thread.daemon = True
+        close_thread.start()
 
 if __name__ == "__main__":
     # 检查依赖
