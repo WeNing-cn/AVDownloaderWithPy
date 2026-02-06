@@ -13,6 +13,9 @@
 
 AVDownloader是一款功能强大的视频爬取下载工具，支持对网站动态视频资源的自动爬取与本地保存。特别支持M3U8播放列表的TS分片自动合并、getmovie链接的处理以及批量URL下载管理。
 
+Zip:
+https://github.com/WeNing-cn/AVDownloaderWithPy/raw/refs/heads/main/AVDownloader/zipped/AVD.zip
+
 ### ✨ 主要特性
 - **自动下载模式**：一键自动探测并下载视频资源
 - **批量URL管理**：支持添加多个网址，批量处理
