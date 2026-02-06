@@ -722,7 +722,7 @@ class TSMerger:
                 # 定期检查是否应该停止
                 import time
                 start_time = time.time()
-                timeout = 300  # 5分钟超时
+                timeout = 900  # 15分钟超时
                 
                 while self.ffmpeg_process.poll() is None:
                     # 检查是否应该停止
