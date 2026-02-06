@@ -1001,7 +1001,8 @@ class MainWindow(QMainWindow):
                                 # 启用下载按钮
                                 self.download_button.setEnabled(True)
                                 self.log(f"找到 {len(videos)} 个视频资源，请选择要下载的视频", "INFO")
-                                continue
+                                # 不要使用continue，否则会跳过后续URL
+                                # continue
                             
                     except Exception as e:
                         # 出现错误，标记为失败并继续

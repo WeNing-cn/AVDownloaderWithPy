@@ -226,13 +226,28 @@ class TSMerger:
         """
         删除指定的临时子目录
         """
-        subdir_path = os.path.join(self.temp_dir, subdir)
         try:
-            if os.path.exists(subdir_path):
-                shutil.rmtree(subdir_path)
-                print(f"临时子目录已删除: {subdir_path}")
-                return True
-            return False
+            # 检查subdir是否是完整路径
+            if os.path.isabs(subdir):
+                subdir_path = subdir
+            else:
+                subdir_path = os.path.join(self.temp_dir, subdir)
+            
+            # 检查是否是我们自己创建的临时目录（在self.temp_dir下）
+            if not subdir_path.startswith(self.temp_dir):
+                print(f"警告: 尝试删除非程序创建的临时目录: {subdir_path}")
+                print("只允许删除程序在 C:\\index\\temp 下创建的临时目录")
+                return False
+            
+            # 检查是否存在
+            if not os.path.exists(subdir_path):
+                print(f"警告: 临时目录不存在: {subdir_path}")
+                return False
+            
+            # 删除目录
+            shutil.rmtree(subdir_path)
+            print(f"临时子目录已删除: {subdir_path}")
+            return True
         except Exception as e:
             print(f"删除临时子目录失败: {e}")
             return False
