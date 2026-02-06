@@ -773,12 +773,23 @@ class TSMerger:
                 # 获取执行结果
                 result = self.ffmpeg_process
                 
-                # 读取输出和错误
-                stdout, stderr = result.communicate()
-                if stdout:
-                    self.log(f"[ffmpeg输出] {stdout}", "DEBUG")
-                if stderr:
-                    self.log(f"[ffmpeg错误] {stderr}", "DEBUG")
+                # 读取输出和错误（进程已结束，直接读取）
+                try:
+                    stdout, stderr = result.stdout.read(), result.stderr.read()
+                    if stdout:
+                        self.log(f"[ffmpeg输出] {stdout}", "DEBUG")
+                    if stderr:
+                        self.log(f"[ffmpeg错误] {stderr}", "DEBUG")
+                except Exception as e:
+                    self.log(f"[错误] 读取ffmpeg输出失败: {e}", "ERROR")
+                    stdout, stderr = "", ""
+                
+                # 关闭输出流
+                try:
+                    result.stdout.close()
+                    result.stderr.close()
+                except:
+                    pass
                 
                 # 重置ffmpeg_process
                 self.ffmpeg_process = None

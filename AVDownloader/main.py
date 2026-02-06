@@ -862,19 +862,14 @@ class MainWindow(QMainWindow):
                     self.log(f"======================================", "INFO")
                     self.log(f"处理URL {url_index + 1}/{len(url_items)}: {url}", "INFO")
                     
-                    # 为每个URL初始化一个新的浏览器实例
+                    # 为每个URL创建一个新的浏览器实例
                     self.log("[步骤1/4] 正在初始化浏览器...", "INFO")
                     self.log("正在创建浏览器实例...", "DEBUG")
-                    self.browser.init_browser()
+                    from browser_simulator import BrowserSimulator
+                    current_browser = BrowserSimulator()
+                    current_browser.init_browser()
                     self.log("[步骤1/4] 浏览器初始化完成", "INFO")
                     self.log("浏览器实例创建成功", "DEBUG")
-                    
-                    # 检查是否已经下载过
-                    if self.is_in_history(url):
-                        self.log(f"[历史记录] 该URL已下载过，跳过: {url}", "INFO")
-                        url_item.update_status(URLItem.STATUS_SUCCESS)
-                        success_count += 1
-                        continue
                     
                     # 更新状态为下载中
                     url_item.update_status(URLItem.STATUS_DOWNLOADING)
@@ -883,7 +878,7 @@ class MainWindow(QMainWindow):
                         # 加载页面
                         self.log(f"[步骤2/4] 正在加载页面: {url}", "INFO")
                         self.log(f"请求URL: {url}", "DEBUG")
-                        success = self.browser.load_page(url)
+                        success = current_browser.load_page(url)
                         if not success:
                             self.log("[步骤2/4] 页面加载失败", "ERROR")
                             self.log("页面可能无法访问或网络连接失败", "ERROR")
@@ -895,7 +890,7 @@ class MainWindow(QMainWindow):
                         
                         # 获取页面内容
                         self.log("[步骤3/4] 正在获取页面内容...", "INFO")
-                        html = self.browser.get_page_content()
+                        html = current_browser.get_page_content()
                         if not html:
                             self.log("[步骤3/4] 无法获取页面内容", "ERROR")
                             self.log("页面内容为空或获取失败", "ERROR")
@@ -908,7 +903,7 @@ class MainWindow(QMainWindow):
                         # 探测视频资源（使用browser中的video_resources，已经过滤为只包含m3u8和key关键词）
                         self.log("[步骤4/4] 正在探测视频资源...", "INFO")
                         self.log("正在分析页面内容，提取视频链接...", "DEBUG")
-                        videos = self.browser.get_video_resources()
+                        videos = current_browser.get_video_resources()
                         self.log(f"[步骤4/4] 视频资源探测完成，找到 {len(videos)} 个资源", "INFO")
                         self.log(f"找到 {len(videos)} 个视频资源", "DEBUG")
                         
@@ -1017,10 +1012,10 @@ class MainWindow(QMainWindow):
                         url_item.update_status(URLItem.STATUS_FAILED)
                         failed_urls.append(url)
                     finally:
-                        # 关闭浏览器实例
+                        # 关闭当前浏览器实例
                         try:
                             self.log("正在关闭浏览器...", "INFO")
-                            self.browser.close()
+                            current_browser.close()
                             self.log("浏览器已关闭", "INFO")
                         except Exception as close_error:
                             self.log(f"[错误] 关闭浏览器时发生错误: {str(close_error)}", "ERROR")
