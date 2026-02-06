@@ -711,12 +711,27 @@ class TSMerger:
             
             # 执行命令
             try:
+                # 再次检查ffmpeg路径
+                if not os.path.exists(self.ffmpeg_path) and self.ffmpeg_path != "ffmpeg":
+                    error_message = f"错误: ffmpeg文件不存在: {self.ffmpeg_path}"
+                    self.log(error_message, "ERROR")
+                    print(error_message)
+                    try:
+                        os.remove(ts_list_file)
+                    except:
+                        pass
+                    return False
+                
                 # 使用Popen以便能够跟踪和终止进程
+                # 添加creationflags=subprocess.CREATE_NO_WINDOW来隐藏命令行窗口
+                import subprocess
                 self.ffmpeg_process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    shell=False  # 确保不使用shell
                 )
                 
                 # 定期检查是否应该停止
@@ -734,8 +749,8 @@ class TSMerger:
                             self.ffmpeg_process.terminate()
                             # 等待进程终止
                             self.ffmpeg_process.wait(timeout=5)
-                        except:
-                            pass
+                        except Exception as e:
+                            self.log(f"[错误] 终止ffmpeg进程失败: {e}", "ERROR")
                         self.ffmpeg_process = None
                         return False
                     
@@ -747,8 +762,8 @@ class TSMerger:
                         try:
                             self.ffmpeg_process.terminate()
                             self.ffmpeg_process.wait(timeout=5)
-                        except:
-                            pass
+                        except Exception as e:
+                            self.log(f"[错误] 终止ffmpeg进程失败: {e}", "ERROR")
                         self.ffmpeg_process = None
                         return False
                     
@@ -757,6 +772,15 @@ class TSMerger:
                 
                 # 获取执行结果
                 result = self.ffmpeg_process
+                
+                # 读取输出和错误
+                stdout, stderr = result.communicate()
+                if stdout:
+                    self.log(f"[ffmpeg输出] {stdout}", "DEBUG")
+                if stderr:
+                    self.log(f"[ffmpeg错误] {stderr}", "DEBUG")
+                
+                # 重置ffmpeg_process
                 self.ffmpeg_process = None
                 
             except FileNotFoundError:
@@ -773,13 +797,15 @@ class TSMerger:
                 error_message = f"执行ffmpeg命令时出错: {e}"
                 self.log(error_message, "ERROR")
                 print(error_message)
+                import traceback
+                traceback.print_exc()
                 try:
                     if self.ffmpeg_process:
                         self.ffmpeg_process.terminate()
                         self.ffmpeg_process.wait(timeout=5)
                         self.ffmpeg_process = None
-                except:
-                    pass
+                except Exception as terminate_error:
+                    self.log(f"[错误] 终止ffmpeg进程失败: {terminate_error}", "ERROR")
                 try:
                     os.remove(ts_list_file)
                 except:
@@ -951,11 +977,24 @@ class TSMerger:
             
         except Exception as e:
             print(f"处理失败: {e}")
+            import traceback
+            traceback.print_exc()
             return {
                 'success': False,
                 'error': str(e),
                 'temp_subdir': temp_subdir  # 保留临时目录供用户处理
             }
+        finally:
+            # 确保ffmpeg进程被终止
+            if self.ffmpeg_process:
+                try:
+                    self.ffmpeg_process.terminate()
+                    self.ffmpeg_process.wait(timeout=5)
+                except:
+                    pass
+                self.ffmpeg_process = None
+            # 重置停止标志
+            self.should_stop = False
     
     def merge_existing_ts_files(self, 
                               subdir: str, 
