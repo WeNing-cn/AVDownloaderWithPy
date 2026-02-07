@@ -487,7 +487,7 @@ class MainWindow(QMainWindow):
     """
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("视频爬取下载工具")
+        self.setWindowTitle("VideoDownloadFromWebs_Tool")
         self.setGeometry(100, 100, 800, 600)
         # 设置窗口图标（如果有）
         # self.setWindowIcon(QIcon('icon.ico'))
