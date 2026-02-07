@@ -48,6 +48,7 @@ def build_exe():
         "--add-data=browser_simulator.py;.",
         "--add-data=utils.py;.",
         "--add-data=decrypt_existing.py;.",
+        "--add-data=download_state_manager.py;.",
 
         "--hidden-import=PyQt5",
         "--hidden-import=PyQt5.QtCore",
@@ -62,6 +63,7 @@ def build_exe():
         "--hidden-import=Crypto.Cipher",
         "--hidden-import=Crypto.Cipher.AES",
         "--hidden-import=Crypto.Util.Padding",
+        "--hidden-import=configparser",
         main_file
     ]
     

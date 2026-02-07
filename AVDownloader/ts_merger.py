@@ -19,7 +19,7 @@ except ImportError:
     print("可以使用: pip install pycryptodome")
 
 class TSMerger:
-    def __init__(self, log_callback=None):
+    def __init__(self, log_callback=None, state_manager=None):
         self.downloader = VideoDownloader()
         self.max_workers = 8  # 并行下载线程数
         self.chunk_size = 1024 * 1024  # 1MB
@@ -36,6 +36,14 @@ class TSMerger:
         self.ffmpeg_process = None
         # 日志回调函数
         self.log_callback = log_callback
+        # 状态管理器
+        self.state_manager = state_manager
+        # 当前任务ID
+        self.current_task_id = None
+        # 线程池执行器引用（用于强制停止）
+        self.executor = None
+        # 全局请求会话（用于强制中断）
+        self.session = requests.Session()
         # 调试信息
         self.log(f"当前工作目录: {os.getcwd()}")
         self.log(f"系统PATH环境变量: {os.environ.get('PATH', '')}")
@@ -70,12 +78,36 @@ class TSMerger:
     
     def stop(self):
         """
-        设置停止标志
+        设置停止标志并强制停止所有下载任务
         """
+        print("[停止] 设置停止标志")
         self.should_stop = True
+        
+        # 关闭请求会话，强制中断所有正在进行的requests请求
+        if self.session:
+            print("[停止] 关闭请求会话，中断所有下载请求...")
+            try:
+                self.session.close()
+            except Exception as e:
+                print(f"[停止] 关闭请求会话失败: {e}")
+        
+        # 强制停止线程池中的所有任务
+        if self.executor:
+            print("[停止] 正在取消所有下载任务...")
+            try:
+                # 取消所有未完成的任务
+                for future in self.executor._futures:
+                    if not future.done():
+                        future.cancel()
+                print(f"[停止] 已取消 {len(self.executor._futures)} 个任务")
+            except Exception as e:
+                print(f"[停止] 取消任务失败: {e}")
+        
         # 同时停止下载器
         if hasattr(self.downloader, 'stop'):
             self.downloader.stop()
+        
+        print("[停止] 停止信号已发送")
     
     def get_temp_dir(self) -> str:
         """
@@ -493,6 +525,11 @@ class TSMerger:
         """
         下载单个TS分片
         """
+        # 检查文件是否已存在
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            print(f"[分片下载] 分片 {segment_index} 已存在，跳过下载")
+            return True
+        
         # 检查是否应该停止
         if self.should_stop:
             print(f"[分片下载] 收到停止信号，跳过分片 {segment_index}")
@@ -508,7 +545,7 @@ class TSMerger:
                 return False
             
             try:
-                response = requests.get(
+                response = self.session.get(
                     ts_url, 
                     headers=self.headers, 
                     stream=True, 
@@ -543,6 +580,10 @@ class TSMerger:
                 # 检查文件大小
                 if os.path.getsize(output_path) == 0:
                     raise Exception("下载的文件为空")
+                
+                # 记录已下载的分片
+                if self.state_manager and self.current_task_id:
+                    self.state_manager.add_downloaded_segment(self.current_task_id, segment_index)
                 
                 return True
                 
@@ -580,63 +621,93 @@ class TSMerger:
         # 创建临时目录
         os.makedirs(temp_dir, exist_ok=True)
         
+        # 获取已下载的分片列表
+        downloaded_indices = []
+        if self.state_manager and self.current_task_id:
+            downloaded_indices = self.state_manager.get_downloaded_segments(self.current_task_id)
+            print(f"[分片下载] 已下载 {len(downloaded_indices)} 个分片: {downloaded_indices}")
+        
         # 使用线程池并行下载
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # 保存executor引用，用于强制停止
+            self.executor = executor
+            
             # 提交所有下载任务
             future_to_segment = {}
-            for i, ts_url in enumerate(ts_urls):
-                # 检查是否应该停止
-                if self.should_stop:
-                    print(f"[分片下载] 收到停止信号，停止提交下载任务")
-                    break
-                
-                segment_path = os.path.join(temp_dir, f"segment_{i:06d}.ts")
-                future = executor.submit(self.download_ts_segment, ts_url, segment_path, encryption_info, i)
-                future_to_segment[future] = (i, segment_path)
+            skipped_count = 0  # 跳过的分片计数
+            try:
+                for i, ts_url in enumerate(ts_urls):
+                    # 检查是否应该停止
+                    if self.should_stop:
+                        print(f"[分片下载] 收到停止信号，停止提交下载任务")
+                        break
+                    
+                    # 检查分片是否已下载
+                    if i in downloaded_indices:
+                        segment_path = os.path.join(temp_dir, f"segment_{i:06d}.ts")
+                        if os.path.exists(segment_path) and os.path.getsize(segment_path) > 0:
+                            print(f"[分片下载] 分片 {i} 已存在，跳过下载")
+                            skipped_count += 1
+                            continue
+                    
+                    segment_path = os.path.join(temp_dir, f"segment_{i:06d}.ts")
+                    future = executor.submit(self.download_ts_segment, ts_url, segment_path, encryption_info, i)
+                    future_to_segment[future] = (i, segment_path)
+            except Exception as e:
+                print(f"[分片下载] 提交下载任务失败: {e}")
             
             # 监控下载进度
-            completed = 0
+            completed = skipped_count  # 从跳过的分片开始计数
             success_map = {}  # 使用字典记录每个索引的下载结果
             
-            for future in concurrent.futures.as_completed(future_to_segment):
-                # 检查是否应该停止
-                if self.should_stop:
-                    print(f"[分片下载] 收到停止信号，取消剩余下载任务")
-                    # 取消所有未完成的任务
-                    for f in future_to_segment:
-                        if not f.done():
-                            f.cancel()
-                    break
-                
-                i, segment_path = future_to_segment[future]
-                try:
-                    success = future.result()
-                    if success:
-                        success_map[i] = segment_path
-                        completed += 1
-                        
-                        # 更新进度
-                        if progress_callback:
-                            progress = (completed / total_segments) * 100
-                            progress_callback(progress, completed, total_segments)
-                        
-                        print(f"下载进度: {completed}/{total_segments} ({progress:.1f}%)")
-                    else:
-                        print(f"分片 {i} 下载失败")
-                
-                except Exception as e:
-                    print(f"分片 {i} 下载异常: {e}")
-            
-            # 按顺序返回下载成功的分片
-            downloaded_segments = []
-            for i in range(total_segments):
-                if i in success_map:
-                    downloaded_segments.append(success_map[i])
-                else:
-                    print(f"警告: 分片 {i} 下载失败，跳过")
-            
-            print(f"成功下载 {len(downloaded_segments)}/{total_segments} 个分片")
-            return downloaded_segments
+            try:
+                for future in concurrent.futures.as_completed(future_to_segment):
+                    # 检查是否应该停止
+                    if self.should_stop:
+                        print(f"[分片下载] 收到停止信号，取消剩余下载任务")
+                        # 取消所有未完成的任务
+                        for f in future_to_segment:
+                            if not f.done():
+                                try:
+                                    f.cancel()
+                                except:
+                                    pass
+                        break
+                    
+                    i, segment_path = future_to_segment[future]
+                    try:
+                        success = future.result()
+                        if success:
+                            success_map[i] = segment_path
+                            completed += 1
+                            
+                            # 更新进度
+                            if progress_callback:
+                                try:
+                                    progress = (completed / total_segments) * 100
+                                    progress_callback(progress, completed, total_segments)
+                                    print(f"下载进度: {completed}/{total_segments} ({progress:.1f}%)")
+                                except Exception as callback_error:
+                                    print(f"[分片下载] 进度回调失败: {callback_error}")
+                        else:
+                            print(f"分片 {i} 下载失败")
+                    
+                    except Exception as e:
+                        print(f"分片 {i} 下载异常: {e}")
+            except Exception as e:
+                print(f"[分片下载] 监控下载进度失败: {e}")
+        
+        # 按顺序返回下载成功的分片
+        final_downloaded_segments = []
+        for i in range(total_segments):
+            segment_path = os.path.join(temp_dir, f"segment_{i:06d}.ts")
+            if os.path.exists(segment_path) and os.path.getsize(segment_path) > 0:
+                final_downloaded_segments.append(segment_path)
+            else:
+                print(f"警告: 分片 {i} 不存在或为空，跳过")
+        
+        print(f"成功下载 {len(final_downloaded_segments)}/{total_segments} 个分片（跳过 {skipped_count} 个已下载分片）")
+        return final_downloaded_segments
     
     def merge_ts_segments(self, 
                          ts_files: List[str], 
@@ -724,91 +795,45 @@ class TSMerger:
             self.log(debug_message, "DEBUG")
             print(debug_message)
             
-            # 执行命令
+            # 再次检查ffmpeg路径
+            if not os.path.exists(self.ffmpeg_path) and self.ffmpeg_path != "ffmpeg":
+                error_message = f"错误: ffmpeg文件不存在: {self.ffmpeg_path}"
+                self.log(error_message, "ERROR")
+                print(error_message)
+                try:
+                    os.remove(ts_list_file)
+                except:
+                    pass
+                return False
+            
+            # 执行ffmpeg命令，使用简化的方式确保不会卡住
+            import subprocess
+            
+            # 执行ffmpeg命令，使用check_call直接执行并等待完成
             try:
-                # 再次检查ffmpeg路径
-                if not os.path.exists(self.ffmpeg_path) and self.ffmpeg_path != "ffmpeg":
-                    error_message = f"错误: ffmpeg文件不存在: {self.ffmpeg_path}"
-                    self.log(error_message, "ERROR")
-                    print(error_message)
-                    try:
-                        os.remove(ts_list_file)
-                    except:
-                        pass
-                    return False
-                
-                # 使用Popen以便能够跟踪和终止进程
-                # 添加creationflags=subprocess.CREATE_NO_WINDOW来隐藏命令行窗口
-                import subprocess
-                self.ffmpeg_process = subprocess.Popen(
+                # 执行命令并等待完成，使用DEVNULL避免输出缓冲区阻塞
+                subprocess.check_call(
                     cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                     shell=False  # 确保不使用shell
                 )
                 
-                # 定期检查是否应该停止
-                import time
-                start_time = time.time()
-                timeout = 900  # 15分钟超时
+                success_message = f"ffmpeg合并成功: {output_file}"
+                self.log(success_message, "INFO")
+                print(success_message)
+                return True
                 
-                while self.ffmpeg_process.poll() is None:
-                    # 检查是否应该停止
-                    if self.should_stop:
-                        stop_message = "[合并] 收到停止信号，终止ffmpeg进程"
-                        self.log(stop_message, "INFO")
-                        print(stop_message)
-                        try:
-                            self.ffmpeg_process.terminate()
-                            # 等待进程终止
-                            self.ffmpeg_process.wait(timeout=5)
-                        except Exception as e:
-                            self.log(f"[错误] 终止ffmpeg进程失败: {e}", "ERROR")
-                        self.ffmpeg_process = None
-                        return False
-                    
-                    # 检查是否超时
-                    if time.time() - start_time > timeout:
-                        timeout_message = "[合并] ffmpeg执行超时"
-                        self.log(timeout_message, "ERROR")
-                        print(timeout_message)
-                        try:
-                            self.ffmpeg_process.terminate()
-                            self.ffmpeg_process.wait(timeout=5)
-                        except Exception as e:
-                            self.log(f"[错误] 终止ffmpeg进程失败: {e}", "ERROR")
-                        self.ffmpeg_process = None
-                        return False
-                    
-                    # 短暂休眠，避免CPU占用过高
-                    time.sleep(0.1)
-                
-                # 获取执行结果
-                result = self.ffmpeg_process
-                
-                # 读取输出和错误（进程已结束，直接读取）
+            except subprocess.CalledProcessError as e:
+                error_message = f"ffmpeg合并失败 (返回码: {e.returncode})"
+                self.log(error_message, "ERROR")
+                print(error_message)
                 try:
-                    stdout, stderr = result.stdout.read(), result.stderr.read()
-                    if stdout:
-                        self.log(f"[ffmpeg输出] {stdout}", "DEBUG")
-                    if stderr:
-                        self.log(f"[ffmpeg错误] {stderr}", "DEBUG")
-                except Exception as e:
-                    self.log(f"[错误] 读取ffmpeg输出失败: {e}", "ERROR")
-                    stdout, stderr = "", ""
-                
-                # 关闭输出流
-                try:
-                    result.stdout.close()
-                    result.stderr.close()
+                    os.remove(ts_list_file)
                 except:
                     pass
-                
-                # 重置ffmpeg_process
-                self.ffmpeg_process = None
-                
+                return False
             except FileNotFoundError:
                 error_message = "错误: 找不到ffmpeg命令，请确保ffmpeg已安装并添加到系统PATH环境变量中"
                 self.log(error_message, "ERROR")
@@ -826,41 +851,10 @@ class TSMerger:
                 import traceback
                 traceback.print_exc()
                 try:
-                    if self.ffmpeg_process:
-                        self.ffmpeg_process.terminate()
-                        self.ffmpeg_process.wait(timeout=5)
-                        self.ffmpeg_process = None
-                except Exception as terminate_error:
-                    self.log(f"[错误] 终止ffmpeg进程失败: {terminate_error}", "ERROR")
-                try:
                     os.remove(ts_list_file)
                 except:
                     pass
                 return False
-            
-            # 检查执行结果
-            if result.returncode != 0:
-                error_message = f"ffmpeg合并失败 (返回码: {result.returncode})"
-                stdout_message = f"标准输出: {result.stdout}"
-                stderr_message = f"标准错误: {result.stderr}"
-                
-                self.log(error_message, "ERROR")
-                self.log(stdout_message, "ERROR")
-                self.log(stderr_message, "ERROR")
-                
-                print(error_message)
-                print(stdout_message)
-                print(stderr_message)
-                try:
-                    os.remove(ts_list_file)
-                except:
-                    pass
-                return False
-            
-            success_message = f"ffmpeg合并成功: {output_file}"
-            self.log(success_message, "INFO")
-            print(success_message)
-            return True
         except Exception as e:
             error_message = f"合并TS分片失败: {e}"
             self.log(error_message, "ERROR")
@@ -909,8 +903,33 @@ class TSMerger:
         # 完整输出路径
         output_file = os.path.join(output_path, output_filename)
         
-        # 创建临时子目录
-        temp_subdir = self.create_temp_subdir()
+        # 检查是否是恢复任务（有保存的临时目录）
+        temp_subdir = None
+        is_resume = False  # 是否是断点续传
+        if self.state_manager and self.current_task_id:
+            # 获取任务信息
+            task_info = self.state_manager.get_task(self.current_task_id)
+            if task_info:
+                saved_temp_dir = task_info.get('temp_dir')
+                if saved_temp_dir and os.path.exists(saved_temp_dir):
+                    # 使用保存的临时目录（断点续传）
+                    temp_subdir = saved_temp_dir
+                    is_resume = True
+                    print(f"[断点续传] 使用已存在的临时目录: {temp_subdir}")
+                else:
+                    # 创建新的临时目录
+                    temp_subdir = self.create_temp_subdir()
+                    print(f"[新建任务] 创建新的临时目录: {temp_subdir}")
+                    # 保存临时目录路径到状态管理器
+                    self.state_manager.update_task_info(self.current_task_id, {'temp_dir': temp_subdir})
+            else:
+                # 任务信息不存在，创建新的临时目录
+                temp_subdir = self.create_temp_subdir()
+                print(f"[新建任务] 创建新的临时目录: {temp_subdir}")
+        else:
+            # 创建新的临时目录
+            temp_subdir = self.create_temp_subdir()
+            print(f"[新建任务] 创建新的临时目录: {temp_subdir}")
         
         try:
             # 1. 解析M3U8
@@ -970,12 +989,12 @@ class TSMerger:
                 return {
                     'success': False,
                     'error': 'TS分片合并失败',
-                    'temp_subdir': temp_subdir
+                    'temp_subdir': temp_subdir  # 保留临时目录供下次继续
                 }
             
             print(f"合并成功: {output_file}")
             
-            # 4. 清理临时子目录
+            # 4. 清理临时子目录（只有合并成功才清理）
             print(f"清理临时目录: {temp_subdir}")
             self.delete_temp_subdir(temp_subdir)
             
@@ -1000,7 +1019,6 @@ class TSMerger:
                 'original_segments_count': len(ts_urls),
                 'temp_subdir': None  # 已清理
             }
-            
         except Exception as e:
             print(f"处理失败: {e}")
             import traceback

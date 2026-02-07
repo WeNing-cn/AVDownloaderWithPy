@@ -1,5 +1,6 @@
 import sys
 import os
+import shutil
 import subprocess
 import threading
 from PyQt5.QtWidgets import (
@@ -17,12 +18,18 @@ from video_detector import VideoDetector
 from video_downloader import VideoDownloader
 from ts_merger import TSMerger
 from utils import utils
+from download_state_manager import DownloadStateManager
 
 # 全局变量
 ROOT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 UTILS_DIR = os.path.join(ROOT_DIR, "Utils")
 RESOURCES_DIR = os.path.join(ROOT_DIR, "Resources")
 BATS_DIR = os.path.join(ROOT_DIR, "Bats")
+LOGS_DIR = os.path.join(RESOURCES_DIR, "logs")
+LOG_FILE = os.path.join(LOGS_DIR, "downloader.log")
+
+# 确保日志目录存在
+os.makedirs(LOGS_DIR, exist_ok=True)
 
 
 def check_chrome():
@@ -183,6 +190,11 @@ class WorkerThread(QThread):
             
             # 执行函数
             try:
+                # 在执行函数前再次检查停止标志
+                if self.should_stop:
+                    self.finished.emit({'success': False, 'error': '操作已取消'})
+                    return
+                    
                 result = self.func(*self.args, **self.kwargs)
                 self.finished.emit(result)
             except Exception as e:
@@ -205,9 +217,10 @@ class URLItem(QListWidgetItem):
     STATUS_SUCCESS = "下载成功"
     STATUS_FAILED = "下载失败"
     
-    def __init__(self, url):
+    def __init__(self, url, task_id=None):
         super().__init__()
         self.url = url
+        self.task_id = task_id  # 保存任务ID，用于断点续传
         self.status = self.STATUS_PENDING
         self.update_display()
     
@@ -254,6 +267,101 @@ class VideoItem(QListWidgetItem):
             display_url = display_url[:50] + '...'
         
         return f"{display_url} ({video_type}, {source})"
+
+class PendingTasksDialog(QDialog):
+    """
+    未完成任务对话框
+    """
+    def __init__(self, pending_tasks, parent=None):
+        super().__init__(parent)
+        self.pending_tasks = pending_tasks
+        self.action = None
+        self.init_ui()
+    
+    def init_ui(self):
+        """
+        初始化用户界面
+        """
+        self.setWindowTitle("未完成任务")
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(400)
+        
+        layout = QVBoxLayout(self)
+        
+        # 说明标签
+        info_label = QLabel(f"发现 {len(self.pending_tasks)} 个未完成的任务：")
+        layout.addWidget(info_label)
+        
+        # 任务列表
+        self.task_list = QListWidget()
+        for task in self.pending_tasks:
+            url = task.get('url', '')
+            status = task.get('status', 'unknown')
+            progress = task.get('progress', '0')
+            downloaded = task.get('downloaded', '0')
+            total = task.get('total', '0')
+            
+            # 创建显示文本
+            display_text = f"{url}\n状态: {status}, 进度: {progress}% ({downloaded}/{total})"
+            item = QListWidgetItem(display_text)
+            self.task_list.addItem(item)
+        
+        layout.addWidget(self.task_list)
+        
+        # 按钮布局
+        button_layout = QHBoxLayout()
+        
+        # 继续按钮
+        self.continue_button = QPushButton("继续下载")
+        self.continue_button.clicked.connect(self.on_continue)
+        button_layout.addWidget(self.continue_button)
+        
+        # 删除按钮
+        self.delete_button = QPushButton("删除任务")
+        self.delete_button.clicked.connect(self.on_delete)
+        button_layout.addWidget(self.delete_button)
+        
+        # 忽略按钮
+        self.ignore_button = QPushButton("忽略")
+        self.ignore_button.clicked.connect(self.on_ignore)
+        button_layout.addWidget(self.ignore_button)
+        
+        layout.addLayout(button_layout)
+    
+    def on_continue(self):
+        """
+        继续下载
+        """
+        self.action = 'continue'
+        self.accept()
+    
+    def on_delete(self):
+        """
+        删除任务
+        """
+        reply = QMessageBox.question(
+            self, 
+            "确认删除", 
+            f"确定要删除所有 {len(self.pending_tasks)} 个未完成的任务吗？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            self.action = 'delete'
+            self.accept()
+    
+    def on_ignore(self):
+        """
+        忽略任务
+        """
+        self.action = 'ignore'
+        self.accept()
+    
+    def get_action(self):
+        """
+        获取用户选择的操作
+        """
+        return self.action
 
 class TempFilesDialog(QDialog):
     """
@@ -380,7 +488,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("视频爬取下载工具")
-        self.setGeometry(100, 100, 1200, 800)
+        self.setGeometry(100, 100, 800, 600)
         # 设置窗口图标（如果有）
         # self.setWindowIcon(QIcon('icon.ico'))
         # 设置字体
@@ -398,6 +506,9 @@ class MainWindow(QMainWindow):
         self.history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "download_history.txt")
         # 加载下载历史记录
         self.load_download_history()
+        
+        # 下载状态管理器
+        self.state_manager = DownloadStateManager()
         
         # 初始化UI（必须先初始化UI，因为log方法依赖于self.console）
         print("正在初始化用户界面...")
@@ -418,7 +529,7 @@ class MainWindow(QMainWindow):
         self.log("视频下载器初始化完成", "INFO")
         
         self.log("正在初始化TS合并器...", "INFO")
-        self.ts_merger = TSMerger(log_callback=self.log)
+        self.ts_merger = TSMerger(log_callback=self.log, state_manager=self.state_manager)
         self.log("TS合并器初始化完成", "INFO")
         
         self.log(f"默认下载路径: {self.download_path}", "DEBUG")
@@ -426,6 +537,10 @@ class MainWindow(QMainWindow):
         # 检测临时文件
         self.log("正在检测临时文件...", "INFO")
         self.check_temp_files()
+        
+        # 检测未完成的任务
+        self.log("正在检测未完成的任务...", "INFO")
+        self.check_pending_tasks()
         
         # 日志
         self.log("程序初始化完成", "INFO")
@@ -438,6 +553,84 @@ class MainWindow(QMainWindow):
         # 根据用户要求，不再处理temp中的文件
         self.log("跳过临时文件检测，不处理temp中的文件", "INFO")
         return
+    
+    def check_pending_tasks(self):
+        """
+        检测未完成的任务
+        """
+        try:
+            pending_tasks = self.state_manager.get_pending_tasks()
+            
+            if not pending_tasks:
+                self.log("没有未完成的任务", "INFO")
+                return
+            
+            self.log(f"发现 {len(pending_tasks)} 个未完成的任务", "INFO")
+            
+            # 显示未完成任务对话框
+            dialog = PendingTasksDialog(pending_tasks, self)
+            result = dialog.exec_()
+            
+            if result == QDialog.Accepted:
+                action = dialog.get_action()
+                
+                if action == 'continue':
+                    self.log("用户选择继续下载", "INFO")
+                    self.resume_tasks(pending_tasks)
+                elif action == 'delete':
+                    self.log("用户选择删除未完成任务", "INFO")
+                    self.state_manager.clear_all_tasks()
+                    self.log("已清除所有未完成任务", "INFO")
+                elif action == 'ignore':
+                    self.log("用户选择忽略未完成任务", "INFO")
+            
+        except Exception as e:
+            self.log(f"检测未完成任务失败: {e}", "ERROR")
+            import traceback
+            error_detail = traceback.format_exc()
+            self.log(f"[错误详情] {error_detail}", "ERROR")
+    
+    def resume_tasks(self, pending_tasks):
+        """
+        继续未完成的任务
+        
+        Args:
+            pending_tasks: 未完成任务列表
+        """
+        try:
+            # 清空URL列表
+            self.url_list.clear()
+            
+            # 添加未完成的URL到列表
+            for task in pending_tasks:
+                url = task.get('url', '')
+                task_id = task.get('id')
+                if url:
+                    url_item = URLItem(url, task_id)  # 传递task_id
+                    self.url_list.addItem(url_item)
+                    self.log(f"已添加未完成任务: {url}", "INFO")
+                    
+                    # 检查临时目录是否存在
+                    temp_dir = task.get('temp_dir')
+                    if temp_dir and os.path.exists(temp_dir):
+                        self.log(f"发现临时目录: {temp_dir}", "INFO")
+                        self.log(f"将从已下载的ts文件继续下载", "INFO")
+                    else:
+                        self.log(f"未找到临时目录，将重新下载所有文件", "INFO")
+            
+            # 更新任务状态为pending
+            for task in pending_tasks:
+                task_id = task.get('id')
+                if task_id:
+                    self.state_manager.update_task_status(task_id, 'pending')
+            
+            self.log(f"已恢复 {len(pending_tasks)} 个未完成任务", "INFO")
+            
+        except Exception as e:
+            self.log(f"恢复任务失败: {e}", "ERROR")
+            import traceback
+            error_detail = traceback.format_exc()
+            self.log(f"[错误详情] {error_detail}", "ERROR")
     
     def on_merge_finished(self, result):
         """
@@ -522,6 +715,11 @@ class MainWindow(QMainWindow):
         self.clear_button = QPushButton("清空")
         self.clear_button.clicked.connect(self.clear_all)
         other_controls.addWidget(self.clear_button)
+        
+        # 清除垃圾按钮
+        self.clear_temp_button = QPushButton("清除垃圾")
+        self.clear_temp_button.clicked.connect(self.clear_temp_files)
+        other_controls.addWidget(self.clear_temp_button)
         
         # 保存路径选择
         path_label = QLabel("保存路径:")
@@ -784,7 +982,7 @@ class MainWindow(QMainWindow):
 
     def log(self, message, level="INFO"):
         """
-        输出日志到控制台
+        输出日志到控制台和文件
         
         Args:
             message: 日志消息
@@ -804,6 +1002,62 @@ class MainWindow(QMainWindow):
         self.console.verticalScrollBar().setValue(self.console.verticalScrollBar().maximum())
         # 同时输出到控制台
         print(f"[{timestamp}] [{level}] {message}")
+        # 写入日志文件
+        try:
+            log_entry = f"[{timestamp}] [{level}] {message}\n"
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(log_entry)
+            
+            # 清理日志文件，只保留最近的10条视频下载记录
+            self._cleanup_log_file()
+        except Exception as e:
+            # 避免日志写入失败影响主程序
+            print(f"日志文件写入失败: {e}")
+    
+    def _cleanup_log_file(self):
+        """
+        清理日志文件，只保留最近的10条视频下载记录
+        """
+        try:
+            if not os.path.exists(LOG_FILE):
+                return
+            
+            # 读取所有日志条目
+            with open(LOG_FILE, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            
+            # 过滤出视频下载记录和其他重要日志
+            video_logs = []
+            important_logs = []
+            
+            for line in lines:
+                # 识别视频下载相关的日志
+                if any(keyword in line for keyword in ["下载成功", "合并成功", "视频下载", "M3U8", "[成功]", "[错误]", "[警告]"]):
+                    video_logs.append(line)
+                # 保留其他重要日志（如初始化、清理等）
+                elif any(keyword in line for keyword in ["初始化", "清除垃圾", "程序准备就绪"]):
+                    important_logs.append(line)
+            
+            # 只保留最近的10条视频下载记录
+            if len(video_logs) > 10:
+                video_logs = video_logs[-10:]
+            
+            # 重新写入日志文件
+            with open(LOG_FILE, "w", encoding="utf-8") as f:
+                # 先写入重要日志
+                f.writelines(important_logs)
+                # 再写入保留的视频下载记录
+                f.writelines(video_logs)
+            
+            # 验证清理结果
+            with open(LOG_FILE, "r", encoding="utf-8") as f:
+                cleaned_lines = f.readlines()
+            
+            print(f"[日志清理] 已清理日志文件，保留 {len(cleaned_lines)} 行记录")
+                
+        except Exception as e:
+            # 避免清理失败影响主程序
+            print(f"清理日志文件失败: {e}")
     
     def browse_path(self):
         """
@@ -855,12 +1109,44 @@ class MainWindow(QMainWindow):
             failed_urls = []
             success_count = 0
             
+            # 不再清除所有旧任务，保留未完成的任务以支持断点续传
+            # self.state_manager.clear_all_tasks()
+            
             try:
                 # 处理每个URL
                 for url_index, url_item in enumerate(url_items):
                     url = url_item.url
                     self.log(f"======================================", "INFO")
                     self.log(f"处理URL {url_index + 1}/{len(url_items)}: {url}", "INFO")
+                    
+                    # 检查是否是恢复的任务（URLItem中有task_id）
+                    if hasattr(url_item, 'task_id') and url_item.task_id:
+                        # 使用原来的task_id（断点续传）
+                        task_id = url_item.task_id
+                        print(f"[断点续传] 使用已存在的任务ID: {task_id}")
+                        
+                        # 更新任务状态为downloading
+                        self.state_manager.update_task_status(task_id, 'downloading')
+                        self.log(f"[任务] 恢复任务: {task_id}", "DEBUG")
+                    else:
+                        # 创建新的任务ID（使用时间戳和URL的哈希值）
+                        import hashlib
+                        import time
+                        task_id = f"task_{int(time.time())}_{hashlib.md5(url.encode()).hexdigest()[:8]}"
+                        
+                        # 保存任务信息
+                        task_info = {
+                            'url': url,
+                            'status': 'downloading',
+                            'progress': 0,
+                            'downloaded': 0,
+                            'total': 0,
+                            'download_path': self.download_path,
+                            'created_time': utils.get_datetime(),
+                            'temp_dir': None  # 临时目录，在开始下载时设置
+                        }
+                        self.state_manager.save_task(task_id, task_info)
+                        self.log(f"[任务] 已创建任务: {task_id}", "DEBUG")
                     
                     # 为每个URL创建一个新的浏览器实例
                     self.log("[步骤1/4] 正在初始化浏览器...", "INFO")
@@ -914,16 +1200,24 @@ class MainWindow(QMainWindow):
                             if 'getmovie' in video_url.lower():
                                 # 找到getmovie链接，自动下载
                                 self.log("[模式] 检测到getmovie链接，自动开始下载", "INFO")
-                                download_success = self.download_video_automatically(video_url)
+                                download_success = self.download_video_automatically(video_url, task_id)
                                 if download_success:
                                     url_item.update_status(URLItem.STATUS_SUCCESS)
                                     success_count += 1
                                     getmovie_found = True
                                     # 添加到下载历史记录
                                     self.add_to_history(url)
+                                    # 更新任务状态为成功
+                                    self.state_manager.update_task_status(task_id, 'success')
+                                    # 清除已下载分片记录
+                                    self.state_manager.clear_downloaded_segments(task_id)
+                                    self.log(f"[任务] 任务 {task_id} 已完成", "DEBUG")
                                 else:
                                     url_item.update_status(URLItem.STATUS_FAILED)
                                     failed_urls.append(url)
+                                    # 更新任务状态为失败
+                                    self.state_manager.update_task_status(task_id, 'failed')
+                                    self.log(f"[任务] 任务 {task_id} 已失败", "DEBUG")
                                 break
                         
                         # 如果没有getmovie链接，检查是否有唯一的m3u8文件
@@ -939,9 +1233,14 @@ class MainWindow(QMainWindow):
                                     QApplication.processEvents()
                                     self.progress_bar.setValue(int(percentage))
                                     self.progress_label.setText(f"下载进度: {downloaded}/{total} ({percentage:.1f}%)")
+                                    # 更新任务进度
+                                    self.state_manager.update_task_progress(task_id, percentage, downloaded, total)
                                 
                                 # 确保TS合并器的stop标志已重置
                                 self.ts_merger.should_stop = False
+                                
+                                # 设置当前任务ID
+                                self.ts_merger.current_task_id = task_id
                                 
                                 try:
                                     result = self.ts_merger.download_and_merge(
@@ -963,10 +1262,20 @@ class MainWindow(QMainWindow):
                                         success_count += 1
                                         # 添加到下载历史记录
                                         self.add_to_history(url)
+                                        # 更新任务状态为成功
+                                        self.state_manager.update_task_status(task_id, 'success')
+                                        # 清除已下载分片记录
+                                        self.state_manager.clear_downloaded_segments(task_id)
+                                        # 清理任务记录
+                                        self.state_manager.remove_task(task_id)
+                                        self.log(f"[任务] 任务 {task_id} 已完成并清理", "DEBUG")
                                     else:
                                         url_item.update_status(URLItem.STATUS_FAILED)
                                         failed_urls.append(url)
                                         self.log(f"[错误] 下载失败: {result.get('error', '未知错误')}", "ERROR")
+                                        # 更新任务状态为失败
+                                        self.state_manager.update_task_status(task_id, 'failed')
+                                        self.log(f"[任务] 任务 {task_id} 已失败", "DEBUG")
                                 except Exception as e:
                                     # 捕获所有异常，确保程序不会崩溃
                                     self.log(f"[错误] 下载过程中发生异常: {str(e)}", "ERROR")
@@ -1062,9 +1371,13 @@ class MainWindow(QMainWindow):
         self.worker_thread.finished.connect(self.on_detection_finished)
         self.worker_thread.start()
     
-    def download_video_automatically(self, video_url):
+    def download_video_automatically(self, video_url, task_id):
         """
         自动下载视频（用于getmovie链接）
+        
+        Args:
+            video_url: 视频URL
+            task_id: 任务ID
         """
         try:
             # 检查是否为getmovie链接
@@ -1101,10 +1414,15 @@ class MainWindow(QMainWindow):
                         # 更新进度条
                         self.progress_bar.setValue(int(percentage))
                         self.progress_label.setText(f"下载进度: {downloaded}/{total} ({percentage:.1f}%)")
+                        # 更新任务进度到状态管理器
+                        self.state_manager.update_task_progress(task_id, percentage, downloaded, total)
                     
                     self.log(f"[准备] 目标URL: {m3u8_url}", "INFO")
                     self.log(f"[准备] 保存路径: {self.download_path}", "INFO")
                     self.log(f"M3U8 URL: {m3u8_url}", "DEBUG")
+                    
+                    # 设置当前任务ID
+                    self.ts_merger.current_task_id = task_id
                     
                     result = self.ts_merger.download_and_merge(
                         m3u8_url,
@@ -1261,6 +1579,9 @@ class MainWindow(QMainWindow):
                         self.log(f"[准备] 保存路径: {self.download_path}", "INFO")
                         self.log(f"M3U8 URL: {m3u8_url}", "DEBUG")
                         
+                        # 设置当前任务ID
+                        self.ts_merger.current_task_id = task_id
+                        
                         result = self.ts_merger.download_and_merge(
                             m3u8_url,
                             self.download_path,
@@ -1396,71 +1717,206 @@ class MainWindow(QMainWindow):
         # 记录操作
         self.log("已清空所有输入和输出", "INFO")
     
+    def clear_temp_files(self):
+        """
+        清除临时目录中的所有内容
+        """
+        reply = QMessageBox.question(
+            self, 
+            "确认清除", 
+            "确定要清除临时目录中的所有内容吗？\n\n临时目录: C:\\index\\temp\n\n此操作将删除所有临时下载的文件，无法恢复！",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            self.log("[清除垃圾] 开始清除临时目录中的所有内容...", "INFO")
+            
+            try:
+                temp_dir = r"C:\index\temp"
+                
+                if not os.path.exists(temp_dir):
+                    self.log("[清除垃圾] 临时目录不存在: " + temp_dir, "WARNING")
+                    QMessageBox.information(self, "提示", "临时目录不存在")
+                    return
+                
+                # 获取临时目录中的所有内容
+                items = os.listdir(temp_dir)
+                
+                if not items:
+                    self.log("[清除垃圾] 临时目录为空，无需清除", "INFO")
+                    QMessageBox.information(self, "提示", "临时目录为空")
+                    return
+                
+                # 删除所有文件和目录
+                deleted_count = 0
+                failed_count = 0
+                
+                for item in items:
+                    item_path = os.path.join(temp_dir, item)
+                    try:
+                        if os.path.isfile(item_path):
+                            os.remove(item_path)
+                            self.log(f"[清除垃圾] 已删除文件: {item}", "DEBUG")
+                        elif os.path.isdir(item_path):
+                            shutil.rmtree(item_path)
+                            self.log(f"[清除垃圾] 已删除目录: {item}", "DEBUG")
+                        deleted_count += 1
+                    except Exception as e:
+                        self.log(f"[清除垃圾] 删除失败: {item} - {e}", "ERROR")
+                        failed_count += 1
+                
+                self.log(f"[清除垃圾] 清除完成！成功: {deleted_count}, 失败: {failed_count}", "INFO")
+                
+                if failed_count == 0:
+                    QMessageBox.information(self, "成功", f"已成功清除 {deleted_count} 个文件/目录")
+                else:
+                    QMessageBox.warning(self, "部分成功", f"清除完成！\n成功: {deleted_count}\n失败: {failed_count}")
+                    
+            except Exception as e:
+                self.log(f"[清除垃圾] 清除失败: {e}", "ERROR")
+                import traceback
+                error_detail = traceback.format_exc()
+                self.log(f"[清除垃圾] 错误详情: {error_detail}", "ERROR")
+                QMessageBox.critical(self, "错误", f"清除失败: {e}")
+    
     def closeEvent(self, event):
         """
         关闭窗口事件
         """
-        # 立即接受事件，避免UI阻塞
-        event.accept()
+        print("[关闭] 开始关闭窗口事件")
         
-        # 在新线程中执行关闭操作，避免阻塞主线程
-        import threading
-        def close_operation():
-            try:
-                # 停止工作线程
-                if hasattr(self, 'worker_thread') and self.worker_thread:
-                    try:
-                        self.worker_thread.stop()
-                        self.worker_thread.wait()
-                    except:
-                        pass
-                
-                # 停止TS合并器（优先级最高，因为它可能有ffmpeg进程）
-                if hasattr(self, 'ts_merger') and self.ts_merger:
-                    try:
-                        self.ts_merger.stop()
-                    except:
-                        pass
+        # 检查是否有任务正在下载
+        has_downloading_tasks = False
+        if hasattr(self, 'state_manager') and self.state_manager:
+            pending_tasks = self.state_manager.get_pending_tasks()
+            for task in pending_tasks:
+                if task.get('status') == 'downloading':
+                    has_downloading_tasks = True
+                    print(f"[关闭] 发现正在下载的任务: {task.get('id')}")
+                    break
+        
+        # 如果有任务正在下载，显示弹窗并停止下载
+        if has_downloading_tasks:
+            print("[关闭] 有任务正在下载，需要先停止下载工作")
+            
+            # 创建一个模态的QMessageBox
+            msg_box = QMessageBox()
+            msg_box.setWindowTitle("保存任务")
+            msg_box.setText("当前任务正在保存，请等待")
+            msg_box.setStandardButtons(QMessageBox.NoButton)
+            msg_box.setWindowModality(Qt.WindowModal)
+            msg_box.show()
+            
+            # 处理事件，确保弹窗显示
+            QApplication.processEvents()
+            
+            # 阻止默认关闭行为
+            event.ignore()
+            
+            # 使用QTimer延迟执行停止操作，避免阻塞UI线程
+            from PyQt5.QtCore import QTimer
+            
+            def stop_and_save():
+                try:
+                    # 1. 停止所有下载相关的工作
+                    print("[关闭] 开始停止下载工作")
                     
-                    # 尝试终止可能的ffmpeg进程
-                    if hasattr(self.ts_merger, 'ffmpeg_process'):
+                    # 停止TS合并器（优先级最高，因为它可能有ffmpeg进程）
+                    if hasattr(self, 'ts_merger') and self.ts_merger:
                         try:
-                            if self.ts_merger.ffmpeg_process:
-                                self.ts_merger.ffmpeg_process.terminate()
-                                print("[关闭] ffmpeg进程已终止")
-                        except:
-                            pass
-                
-                # 停止浏览器模拟器
-                if hasattr(self, 'browser') and self.browser:
-                    try:
-                        self.browser.close()
-                        print("[关闭] 浏览器已关闭")
-                    except:
-                        pass
-                
-                # 停止其他模块
-                if hasattr(self, 'downloader') and self.downloader:
-                    try:
-                        if hasattr(self.downloader, 'stop'):
-                            self.downloader.stop()
-                    except:
-                        pass
-                
-                if hasattr(self, 'detector') and self.detector:
-                    try:
-                        if hasattr(self.detector, 'stop'):
-                            self.detector.stop()
-                    except:
-                        pass
-                
-            except Exception as e:
-                print(f"[关闭] 发生错误: {e}")
-        
-        # 创建并启动关闭线程
-        close_thread = threading.Thread(target=close_operation)
-        close_thread.daemon = True
-        close_thread.start()
+                            self.ts_merger.stop()
+                            print("[关闭] TS合并器已停止")
+                        except Exception as e:
+                            print(f"[关闭] 停止TS合并器失败: {e}")
+                    
+                    # 停止工作线程
+                    if hasattr(self, 'worker_thread') and self.worker_thread:
+                        try:
+                            self.worker_thread.stop()
+                            # 等待线程停止，最多等待3秒
+                            self.worker_thread.wait(3000)
+                            print("[关闭] 工作线程已停止")
+                        except Exception as e:
+                            print(f"[关闭] 停止工作线程失败: {e}")
+                    
+                    # 停止浏览器模拟器
+                    if hasattr(self, 'browser') and self.browser:
+                        try:
+                            self.browser.close()
+                            print("[关闭] 浏览器已关闭")
+                        except Exception as e:
+                            print(f"[关闭] 关闭浏览器失败: {e}")
+                    
+                    # 停止其他模块
+                    if hasattr(self, 'downloader') and self.downloader:
+                        try:
+                            if hasattr(self.downloader, 'stop'):
+                                self.downloader.stop()
+                                print("[关闭] 下载器已停止")
+                        except Exception as e:
+                            print(f"[关闭] 停止下载器失败: {e}")
+                    
+                    if hasattr(self, 'detector') and self.detector:
+                        try:
+                            if hasattr(self.detector, 'stop'):
+                                self.detector.stop()
+                                print("[关闭] 检测器已停止")
+                        except Exception as e:
+                            print(f"[关闭] 停止检测器失败: {e}")
+                    
+                    print("[关闭] 下载工作已停止")
+                    
+                    # 2. 保存当前下载状态
+                    print("[关闭] 开始保存当前下载状态")
+                    if hasattr(self, 'state_manager') and self.state_manager:
+                        try:
+                            pending_tasks = self.state_manager.get_pending_tasks()
+                            for task in pending_tasks:
+                                task_id = task.get('id')
+                                print(f"[关闭] 检查任务: {task_id}, 状态: {task.get('status')}")
+                                if task_id and task.get('status') == 'downloading':
+                                    self.state_manager.update_task_status(task_id, 'paused')
+                                    print(f"[关闭] 任务 {task_id} 已标记为暂停")
+                            
+                            print(f"[关闭] 已保存任务状态")
+                            
+                            # 检查配置文件是否存在
+                            import os
+                            if os.path.exists(self.state_manager.config_file):
+                                print(f"[关闭] 配置文件已创建: {self.state_manager.config_file}")
+                            else:
+                                print(f"[关闭] 警告：配置文件不存在: {self.state_manager.config_file}")
+                        except Exception as e:
+                            print(f"[关闭] 保存任务状态失败: {e}")
+                            import traceback
+                            traceback.print_exc()
+                    
+                    # 3. 关闭弹窗并退出程序
+                    print("[关闭] 准备关闭程序")
+                    msg_box.close()
+                    QApplication.quit()
+                    
+                except Exception as e:
+                    print(f"[关闭] 停止和保存过程中出错: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # 即使出错也要关闭程序
+                    msg_box.close()
+                    QApplication.quit()
+            
+            # 使用QTimer延迟100毫秒执行，确保UI线程有时间处理事件
+            QTimer.singleShot(100, stop_and_save)
+        else:
+            # 如果没有任务正在下载，直接关闭
+            print("[关闭] 没有任务正在下载，直接关闭")
+            event.accept()
+    
+    def close_application(self):
+        """
+        关闭应用程序
+        """
+        print("[关闭] 关闭应用程序")
+        QApplication.quit()
 
 
 def main():
