@@ -13,9 +13,6 @@
 
 AVDownloader是一款功能强大的视频爬取下载工具，支持对网站动态视频资源的自动爬取与本地保存。特别支持M3U8播放列表的TS分片自动合并、getmovie链接的处理以及批量URL下载管理。
 
-Zip:
-https://github.com/WeNing-cn/AVDownloaderWithPy/raw/refs/heads/main/AVDownloader/zipped/AVD.zip
-
 ### ✨ 主要特性
 - **自动下载模式**：一键自动探测并下载视频资源
 - **批量URL管理**：支持添加多个网址，批量处理
@@ -25,6 +22,8 @@ https://github.com/WeNing-cn/AVDownloaderWithPy/raw/refs/heads/main/AVDownloader
 - **手动下载选项**：对于复杂资源提供手动选择下载
 - **TS分片处理**：自动下载、解密和合并TS格式视频分片
 - **直观的用户界面**：基于PyQt5构建的现代化界面
+- **日志记录系统**：详细记录下载过程和错误信息
+- **断点续传支持**：支持下载中断后恢复任务
 
 ## 📁 项目结构
 
@@ -38,6 +37,7 @@ AVDownloaderWithQTCpp/
 │   ├── ts_merger.py           # TS分片合并模块
 │   ├── utils.py               # 工具函数
 │   ├── decrypt_existing.py    # 现有TS文件解密工具
+│   ├── download_state_manager.py  # 下载状态管理模块
 │   ├── build_exe.py           # 打包脚本
 │   ├── build_exe_simple.py    # 简单打包脚本
 │   ├── test_browser.py        # 浏览器测试脚本
@@ -47,13 +47,16 @@ AVDownloaderWithQTCpp/
 ├── dist/                      # 打包输出目录
 │   ├── AVDownloader.exe       # 可执行文件
 │   ├── Resources/             # 资源目录
-│   │   └── ChromeSetup.exe    # Chrome安装程序
+│   │   ├── logs/              # 日志文件目录
+│   │   │   └── downloader.log # 下载日志文件
+│   │   ├── ChromeSetup.exe    # Chrome安装程序
+│   │   └── download_state.ini # 下载状态配置文件
 │   ├── Utils/                 # 工具目录
 │   │   └── ffmpeg.exe         # FFmpeg工具
 │   ├── 此程序依赖chrome浏览器，会自动安装.txt  # Chrome依赖说明
 │   └── 用户须知.txt           # 用户使用说明
 ├── README.md                  # 项目说明
-└── 要求.md                    # 功能要求文档
+└── LICENSE.md                 # 许可证文件
 ```
 
 ## 🚀 快速开始
@@ -115,6 +118,7 @@ AVDownloaderWithQTCpp/
 - **实时进度**：底部进度条显示下载进度
 - **详细日志**：控制台输出区域显示详细的下载信息
 - **状态显示**：每个URL旁边显示当前下载状态
+- **日志文件**：自动记录下载日志到 `Resources/logs/downloader.log`
 
 ## 🛠️ 技术实现
 
@@ -126,6 +130,7 @@ AVDownloaderWithQTCpp/
 - **视频处理**：FFmpeg工具合并TS分片为完整的MP4文件
 - **网络处理**：requests库发送HTTP请求，支持自定义headers和cookies
 - **文件处理**：自动创建和管理临时目录，确保文件结构清晰
+- **状态管理**：使用配置文件管理下载状态，支持断点续传
 
 ### 核心模块
 1. **MainWindow**：主窗口类，负责界面管理和用户交互
@@ -133,7 +138,8 @@ AVDownloaderWithQTCpp/
 3. **VideoDetector**：视频检测器，负责识别和提取视频链接
 4. **VideoDownloader**：视频下载器，负责下载普通视频文件
 5. **TSMerger**：TS合并器，负责下载、解密和合并TS分片
-6. **WorkerThread**：工作线程，负责在后台执行耗时操作
+6. **DownloadStateManager**：下载状态管理器，负责记录和恢复下载任务
+7. **WorkerThread**：工作线程，负责在后台执行耗时操作
 
 ## 📖 使用指南
 
@@ -150,6 +156,7 @@ AVDownloaderWithQTCpp/
 2. **下载历史管理**：程序会自动记录已下载的URL，避免重复下载
 3. **临时文件处理**：程序启动时会检测临时下载文件，可选择合并或删除
 4. **加密视频处理**：对于加密的视频，程序会自动从网络或本地资源目录获取密钥进行解密
+5. **日志管理**：程序会自动记录下载日志，方便排查问题
 
 ## ⚠️ 注意事项
 
@@ -187,9 +194,28 @@ AVDownloaderWithQTCpp/
    - 尝试关闭其他占用资源较多的程序
    - 对于大型视频，下载过程可能需要较长时间，请耐心等待
 
+5. **FFmpeg命令卡住**：
+   - 本工具已优化FFmpeg命令执行，避免命令卡住的问题
+   - 如遇到此问题，请确保使用最新版本的可执行文件
+
 ## 📝 更新日志
 
-### v1.4.0（最新版本）
+### v1.5.0（最新版本）
+- **核心功能**：
+  - 修复FFmpeg命令执行卡住的问题，优化进程管理
+  - 添加下载状态管理模块，支持断点续传
+  - 实现日志记录系统，自动保存下载日志到文件
+  - 优化TS分片合并逻辑，提高合并成功率
+- **性能优化**：
+  - 优化FFmpeg命令执行方式，使用DEVNULL避免输出缓冲区阻塞
+  - 改进进程管理，确保FFmpeg进程正确终止
+  - 优化错误处理，提高程序稳定性
+- **用户体验**：
+  - 改进日志输出，提供更详细的下载信息
+  - 优化进度显示，提供更直观的下载状态
+  - 增强状态管理，支持下载任务恢复
+
+### v1.4.0
 - **核心功能**：
   - 将开始探测按钮改为自动下载按钮
   - 增加删除已成功下载网址的功能
