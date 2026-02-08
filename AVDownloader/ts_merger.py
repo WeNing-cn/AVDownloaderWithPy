@@ -527,12 +527,14 @@ class TSMerger:
         """
         # 检查文件是否已存在
         if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            print(f"[分片下载] 分片 {segment_index} 已存在，跳过下载")
+            msg = f"[分片下载] 分片 {segment_index} 已存在，跳过下载"
+            print(msg)
             return True
         
         # 检查是否应该停止
         if self.should_stop:
-            print(f"[分片下载] 收到停止信号，跳过分片 {segment_index}")
+            msg = f"[分片下载] 收到停止信号，跳过分片 {segment_index}"
+            print(msg)
             return False
         
         retries = 0
@@ -541,10 +543,14 @@ class TSMerger:
         while retries < max_retries:
             # 再次检查是否应该停止
             if self.should_stop:
-                print(f"[分片下载] 收到停止信号，取消分片 {segment_index} 的下载")
+                msg = f"[分片下载] 收到停止信号，取消分片 {segment_index} 的下载"
+                print(msg)
                 return False
             
             try:
+                msg = f"[分片下载] 开始下载分片 {segment_index}: {ts_url}"
+                print(msg)
+                
                 response = self.session.get(
                     ts_url, 
                     headers=self.headers, 
@@ -562,7 +568,8 @@ class TSMerger:
                 for chunk in response.iter_content(chunk_size=self.chunk_size):
                     # 检查是否应该停止
                     if self.should_stop:
-                        print(f"[分片下载] 收到停止信号，取消分片 {segment_index} 的下载")
+                        msg = f"[分片下载] 收到停止信号，取消分片 {segment_index} 的下载"
+                        print(msg)
                         return False
                     
                     if chunk:
@@ -570,7 +577,8 @@ class TSMerger:
                 
                 # 如果需要解密
                 if encryption_info and encryption_info['method'] != 'NONE' and encryption_info['key']:
-                    print(f"解密分片: {segment_index}")
+                    msg = f"[分片下载] 解密分片: {segment_index}"
+                    print(msg)
                     data = self.decrypt_ts_segment(data, encryption_info, segment_index)
                 
                 # 写入文件
@@ -581,6 +589,9 @@ class TSMerger:
                 if os.path.getsize(output_path) == 0:
                     raise Exception("下载的文件为空")
                 
+                msg = f"[分片下载] 分片 {segment_index} 下载成功，大小: {len(data)} 字节"
+                print(msg)
+                
                 # 记录已下载的分片
                 if self.state_manager and self.current_task_id:
                     self.state_manager.add_downloaded_segment(self.current_task_id, segment_index)
@@ -589,7 +600,8 @@ class TSMerger:
                 
             except Exception as e:
                 retries += 1
-                print(f"下载TS分片失败 {ts_url} (尝试 {retries}/{max_retries}): {e}")
+                error_msg = f"[分片下载] 下载TS分片失败 {ts_url} (尝试 {retries}/{max_retries}): {e}"
+                print(error_msg)
                 
                 # 清理失败的文件
                 if os.path.exists(output_path):
@@ -599,6 +611,8 @@ class TSMerger:
                         pass
                 
                 if retries >= max_retries:
+                    error_msg = f"[分片下载] 分片 {segment_index} 下载失败，已达到最大重试次数"
+                    print(error_msg)
                     return False
                 
                 # 等待一段时间后重试
@@ -686,16 +700,26 @@ class TSMerger:
                                 try:
                                     progress = (completed / total_segments) * 100
                                     progress_callback(progress, completed, total_segments)
-                                    print(f"下载进度: {completed}/{total_segments} ({progress:.1f}%)")
+                                    progress_msg = f"下载进度: {completed}/{total_segments} ({progress:.1f}%)"
+                                    print(progress_msg)
+                                    self.log(progress_msg, "INFO")
                                 except Exception as callback_error:
-                                    print(f"[分片下载] 进度回调失败: {callback_error}")
+                                    error_msg = f"[分片下载] 进度回调失败: {callback_error}"
+                                    print(error_msg)
+                                    self.log(error_msg, "ERROR")
                         else:
-                            print(f"分片 {i} 下载失败")
+                            error_msg = f"分片 {i} 下载失败"
+                            print(error_msg)
+                            self.log(error_msg, "ERROR")
                     
                     except Exception as e:
-                        print(f"分片 {i} 下载异常: {e}")
+                        error_msg = f"分片 {i} 下载异常: {e}"
+                        print(error_msg)
+                        self.log(error_msg, "ERROR")
             except Exception as e:
-                print(f"[分片下载] 监控下载进度失败: {e}")
+                error_msg = f"[分片下载] 监控下载进度失败: {e}"
+                print(error_msg)
+                self.log(error_msg, "ERROR")
         
         # 按顺序返回下载成功的分片
         final_downloaded_segments = []
@@ -704,9 +728,13 @@ class TSMerger:
             if os.path.exists(segment_path) and os.path.getsize(segment_path) > 0:
                 final_downloaded_segments.append(segment_path)
             else:
-                print(f"警告: 分片 {i} 不存在或为空，跳过")
+                warning_msg = f"警告: 分片 {i} 不存在或为空，跳过"
+                print(warning_msg)
+                self.log(warning_msg, "WARNING")
         
-        print(f"成功下载 {len(final_downloaded_segments)}/{total_segments} 个分片（跳过 {skipped_count} 个已下载分片）")
+        summary_msg = f"成功下载 {len(final_downloaded_segments)}/{total_segments} 个分片（跳过 {skipped_count} 个已下载分片）"
+        print(summary_msg)
+        self.log(summary_msg, "INFO")
         return final_downloaded_segments
     
     def merge_ts_segments(self, 

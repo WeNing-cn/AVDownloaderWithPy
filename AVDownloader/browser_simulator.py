@@ -523,6 +523,34 @@ class BrowserSimulator:
                 print("浏览器已关闭")
             except Exception as e:
                 print(f"关闭浏览器失败: {e}")
+            finally:
+                self.driver = None
+    
+    def __del__(self) -> None:
+        """
+        析构函数，确保浏览器进程被正确关闭
+        """
+        if self.driver:
+            try:
+                self.driver.quit()
+                print("浏览器已在析构时关闭")
+            except Exception as e:
+                print(f"析构时关闭浏览器失败: {e}")
+            finally:
+                self.driver = None
+    
+    def __enter__(self):
+        """
+        上下文管理器入口
+        """
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        上下文管理器出口，确保浏览器被关闭
+        """
+        self.close()
+        return False
     
     def screenshot(self, path: str) -> bool:
         """
@@ -563,6 +591,30 @@ class SyncBrowserSimulator:
     
     def close(self) -> None:
         return self.simulator.close()
+    
+    def __del__(self) -> None:
+        """
+        析构函数，确保浏览器进程被正确关闭
+        """
+        if hasattr(self, 'simulator') and self.simulator:
+            try:
+                self.simulator.close()
+                print("SyncBrowserSimulator已在析构时关闭")
+            except Exception as e:
+                print(f"析构时关闭SyncBrowserSimulator失败: {e}")
+    
+    def __enter__(self):
+        """
+        上下文管理器入口
+        """
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        上下文管理器出口，确保浏览器被关闭
+        """
+        self.close()
+        return False
     
     def screenshot(self, path: str) -> bool:
         return self.simulator.screenshot(path)
