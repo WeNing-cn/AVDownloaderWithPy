@@ -5,6 +5,7 @@ on:
     branches: [ main, master ]
     paths:
       - 'mobile/**'
+      - '.github/workflows/**'
   pull_request:
     branches: [ main, master ]
     paths:
@@ -24,7 +25,7 @@ jobs:
       with:
         python-version: '3.10'
     
-    - name: Install dependencies
+    - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
@@ -44,21 +45,28 @@ jobs:
           libssl-dev \
           automake
     
-    - name: Install Buildozer
+    - name: Install Buildozer and dependencies
       run: |
         pip install buildozer cython
     
     - name: Build APK
       working-directory: ./mobile
+      timeout-minutes: 60
       run: |
         buildozer -v android debug
     
-    - name: Upload APK
+    - name: Check APK exists
+      working-directory: ./mobile
+      run: |
+        ls -la bin/
+    
+    - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
         name: avdownloader-apk
         path: mobile/bin/*.apk
         retention-days: 30
+        if-no-files-found: error
     
     - name: Create Release
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
