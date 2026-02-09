@@ -45,49 +45,49 @@ jobs:
           libssl-dev \
           automake
     
-    - name: Install Android SDK and Build Tools
+    - name: Install Android SDK Tools
       run: |
         # 创建 Android SDK 目录
-        mkdir -p $HOME/android-sdk/cmdline-tools
+        mkdir -p $HOME/android-sdk/cmdline-tools/latest
         
         # 下载命令行工具
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
-        unzip -q cmdline-tools.zip -d $HOME/android-sdk/cmdline-tools/
-        mv $HOME/android-sdk/cmdline-tools/cmdline-tools $HOME/android-sdk/cmdline-tools/latest
+        unzip -q cmdline-tools.zip
+        mv cmdline-tools/bin $HOME/android-sdk/cmdline-tools/latest/
+        mv cmdline-tools/lib $HOME/android-sdk/cmdline-tools/latest/
         
         # 设置环境变量
         echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_SDK=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-        echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
-        echo "$HOME/android-sdk/build-tools/34.0.0" >> $GITHUB_PATH
-        
-        # 接受许可证并安装必要的组件
-        yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/android-sdk --licenses
-        $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/android-sdk "platform-tools" "build-tools;34.0.0" "platforms;android-31"
+        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+        echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools:$HOME/android-sdk/build-tools/34.0.0" >> $GITHUB_ENV
     
     - name: Install Buildozer and dependencies
       run: |
         pip install buildozer cython
     
-    - name: Install Aidl in Buildozer SDK
+    - name: Configure Buildozer SDK Path
       run: |
-        # 等待 Buildozer 创建目录结构
-        mkdir -p $HOME/.buildozer/android/platform/android-sdk/cmdline-tools
+        # 创建 buildozer 配置目录
+        mkdir -p $HOME/.buildozer/android/platform
         
-        # 复制命令行工具到 Buildozer 的 SDK 目录
-        cp -r $HOME/android-sdk/cmdline-tools/latest $HOME/.buildozer/android/platform/android-sdk/cmdline-tools/
+        # 创建符号链接到我们的 SDK
+        ln -sf $HOME/android-sdk $HOME/.buildozer/android/platform/android-sdk
+    
+    - name: Install Android Build Tools
+      run: |
+        # 接受许可证
+        yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses
         
-        # 在 Buildozer 的 SDK 中安装 build-tools
-        yes | $HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/.buildozer/android/platform/android-sdk --licenses
-        $HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/.buildozer/android/platform/android-sdk "build-tools;34.0.0" "platforms;android-31"
+        # 安装必要的组件
+        $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-31"
     
     - name: Build APK
       working-directory: ./mobile
       timeout-minutes: 60
       env:
         ANDROID_HOME: ${{ env.ANDROID_HOME }}
-        ANDROID_SDK: ${{ env.ANDROID_SDK }}
+        ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+        PATH: ${{ env.PATH }}
       run: |
         buildozer -v android debug
     
