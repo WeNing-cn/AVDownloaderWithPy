@@ -69,9 +69,12 @@ jobs:
         echo "ANDROID_SDK_ROOT=$HOME/Android/Sdk" >> $GITHUB_ENV
         echo "PATH=$PATH:$HOME/Android/Sdk/tools/bin:$HOME/Android/Sdk/platform-tools" >> $GITHUB_ENV
     
-    - name: Install Buildozer, Cython, and Kivy dependencies
+    - name: Install Cython (build dependency)
+      run: pip install Cython
+    
+    - name: Install Buildozer, Kivy, and jnius dependencies
       run: |
-        pip install buildozer cython kivy jnius
+        pip install buildozer kivy jnius
     
     - name: Fix jnius long type error
       run: |
