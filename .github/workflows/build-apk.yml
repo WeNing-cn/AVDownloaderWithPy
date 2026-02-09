@@ -70,7 +70,9 @@ jobs:
         echo "PATH=$PATH:$HOME/Android/Sdk/tools/bin:$HOME/Android/Sdk/platform-tools" >> $GITHUB_ENV
     
     - name: Install Cython (build dependency)
-      run: pip install Cython
+      run: |
+        pip install --upgrade Cython
+        python -c "import Cython; print(f'Cython version: {Cython.__version__}')"
     
     - name: Install Buildozer, Kivy, and jnius dependencies
       run: |
