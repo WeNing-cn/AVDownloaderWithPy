@@ -19,7 +19,10 @@ source.include_exts = py,png,jpg,kv,atlas,txt,xml
 version = 1.0.0
 
 # (list) Application requirements
-requirements = python3,kivy,requests,urllib3,beautifulsoup4,pycryptodome,charset-normalizer,idna,certifi,soupsieve
+requirements = python3,kivy,requests,urllib3,beautifulsoup4,pycryptodome,charset-normalizer,idna,certifi,soupsieve,cython
+
+# (list) Python modules to exclude
+exclude_python_modules = grp,spwd
 
 # (list) Supported orientations
 orientation = portrait
