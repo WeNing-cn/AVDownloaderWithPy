@@ -19,7 +19,7 @@ source.include_exts = py,png,jpg,kv,atlas,txt,xml
 version = 1.0.0
 
 # (list) Application requirements
-requirements = python3,kivy,requests,urllib3,beautifulsoup4,pycryptodome,charset-normalizer,idna,certifi,soupsieve,cython
+requirements = python3,kivy==2.3.0,cython==0.29.36,requests,urllib3,beautifulsoup4,pycryptodome,charset-normalizer,idna,certifi,soupsieve
 
 # (list) Python modules to exclude
 exclude_python_modules = grp,spwd
