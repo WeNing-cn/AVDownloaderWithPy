@@ -70,6 +70,18 @@ jobs:
       run: |
         pip install buildozer cython
     
+    - name: Install Aidl in Buildozer SDK
+      run: |
+        # 等待 Buildozer 创建目录结构
+        mkdir -p $HOME/.buildozer/android/platform/android-sdk/cmdline-tools
+        
+        # 复制命令行工具到 Buildozer 的 SDK 目录
+        cp -r $HOME/android-sdk/cmdline-tools/latest $HOME/.buildozer/android/platform/android-sdk/cmdline-tools/
+        
+        # 在 Buildozer 的 SDK 中安装 build-tools
+        yes | $HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/.buildozer/android/platform/android-sdk --licenses
+        $HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/.buildozer/android/platform/android-sdk "build-tools;34.0.0" "platforms;android-31"
+    
     - name: Build APK
       working-directory: ./mobile
       timeout-minutes: 60
