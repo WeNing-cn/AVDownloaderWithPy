@@ -26,6 +26,9 @@ wheels/
 *.manifest
 *.spec
 
+# 但保留 mobile 目录下的 buildozer.spec
+!mobile/buildozer.spec
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
