@@ -1,0 +1,22 @@
+# 移动端依赖库
+# 注意：这些库需要在Android设备上运行
+
+# GUI框架 - Windows开发环境使用预编译版本
+kivy[base]==2.2.1; platform_system=='Windows'
+kivy==2.2.1; platform_system!='Windows'
+
+# 网络请求
+requests==2.31.0
+urllib3==2.1.0
+
+# HTML解析
+beautifulsoup4==4.12.2
+
+# 加密解密
+pycryptodome==3.23.0
+
+# 其他依赖
+certifi==2023.11.17
+charset-normalizer==3.3.2
+idna==3.6
+soupsieve==2.5
