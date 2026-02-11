@@ -69,12 +69,16 @@ jobs:
         echo "ANDROID_SDK_ROOT=$HOME/Android/Sdk" >> $GITHUB_ENV
         echo "PATH=$PATH:$HOME/Android/Sdk/tools/bin:$HOME/Android/Sdk/platform-tools" >> $GITHUB_ENV
     
+    - name: Install Cython first
+      run: |
+        pip install --upgrade Cython
+        python -c "import Cython; print(f'Cython version: {Cython.__version__}')"
+    
     - name: Install Python dependencies
       working-directory: ./mobile
       run: |
         pip install --upgrade pip
         pip install -r requirements-ci.txt
-        python -c "import Cython; print(f'Cython version: {Cython.__version__}')"
     
     - name: Fix jnius long type error
       run: |
