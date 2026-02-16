@@ -22,7 +22,8 @@ from download_state_manager import DownloadStateManager
 
 # 全局变量
 ROOT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
-UTILS_DIR = os.path.join(ROOT_DIR, "Utils")
+DEPENDENCE_DIR = os.path.join(ROOT_DIR, "Dependence")
+UTILS_DIR = DEPENDENCE_DIR
 RESOURCES_DIR = os.path.join(ROOT_DIR, "Resources")
 BATS_DIR = os.path.join(ROOT_DIR, "Bats")
 LOGS_DIR = os.path.join(RESOURCES_DIR, "logs")
@@ -99,7 +100,7 @@ def install_chrome():
 def check_ffmpeg():
     """
     检查FFmpeg是否存在
-    检查路径：Utils\ffmpeg.exe
+    检查路径：Dependence\ffmpeg.exe
     """
     print("正在检查FFmpeg工具...")
     
@@ -148,10 +149,12 @@ def check_dependencies():
 class WorkerThread(QThread):
     """
     工作线程，用于执行耗时操作
+    添加了完善的异常处理和内存管理
     """
     progress_updated = pyqtSignal(float, int, int)
     status_updated = pyqtSignal(str)
     finished = pyqtSignal(dict)
+    error_occurred = pyqtSignal(str, str)  # 错误信号：错误信息，错误详情
     
     def __init__(self, func, *args, **kwargs):
         super().__init__()
@@ -159,17 +162,33 @@ class WorkerThread(QThread):
         self.args = args
         self.kwargs = kwargs
         self.should_stop = False  # 添加停止标志
+        self.main_window = kwargs.pop('main_window', None)  # 保存主窗口引用，并从kwargs中移除
+        self._is_running = False
+        self._lock = threading.Lock()
     
     def stop(self):
         """
         设置停止标志
         """
-        self.should_stop = True
+        with self._lock:
+            self.should_stop = True
+    
+    def is_stopped(self):
+        """
+        检查是否已停止
+        """
+        with self._lock:
+            return self.should_stop
     
     def run(self):
+        self._is_running = True
+        thread_id = threading.current_thread().ident
+        print(f"[WorkerThread-{thread_id}] 线程开始执行")
+        
         try:
             # 检查是否应该停止
-            if self.should_stop:
+            if self.is_stopped():
+                print(f"[WorkerThread-{thread_id}] 线程被标记为停止，立即退出")
                 self.finished.emit({'success': False, 'error': '操作已取消'})
                 return
             
@@ -180,33 +199,55 @@ class WorkerThread(QThread):
                 if 'progress_callback' in sig.parameters:
                     def progress_callback(percentage, downloaded, total):
                         # 检查是否应该停止
-                        if self.should_stop:
+                        if self.is_stopped():
                             return
                         self.progress_updated.emit(percentage, downloaded, total)
                     self.kwargs['progress_callback'] = progress_callback
             except Exception as e:
                 # 忽略签名检查错误，继续执行
-                pass
+                print(f"[WorkerThread-{thread_id}] 进度回调设置警告: {e}")
             
             # 执行函数
             try:
                 # 在执行函数前再次检查停止标志
-                if self.should_stop:
+                if self.is_stopped():
+                    print(f"[WorkerThread-{thread_id}] 执行前检测到停止标志")
                     self.finished.emit({'success': False, 'error': '操作已取消'})
                     return
-                    
+                
+                print(f"[WorkerThread-{thread_id}] 开始执行目标函数")
                 result = self.func(*self.args, **self.kwargs)
+                print(f"[WorkerThread-{thread_id}] 目标函数执行完成")
+                
+                # 确保结果是字典类型
+                if not isinstance(result, dict):
+                    result = {'success': True, 'data': result}
+                
                 self.finished.emit(result)
+                
             except Exception as e:
                 import traceback
                 error_detail = traceback.format_exc()
-                print(f"WorkerThread执行错误: {error_detail}")
-                self.finished.emit({'success': False, 'error': f'{str(e)}\n{error_detail}'})
+                error_msg = f"[WorkerThread-{thread_id}] 执行错误: {str(e)}"
+                print(f"{error_msg}\n{error_detail}")
+                
+                # 通过信号传递错误信息
+                self.error_occurred.emit(str(e), error_detail)
+                self.finished.emit({'success': False, 'error': str(e), 'traceback': error_detail})
+                
         except Exception as e:
             import traceback
             error_detail = traceback.format_exc()
-            print(f"WorkerThread线程错误: {error_detail}")
-            self.finished.emit({'success': False, 'error': f'{str(e)}\n{error_detail}'})
+            error_msg = f"[WorkerThread-{thread_id}] 线程级错误: {str(e)}"
+            print(f"{error_msg}\n{error_detail}")
+            
+            # 通过信号传递错误信息
+            self.error_occurred.emit(str(e), error_detail)
+            self.finished.emit({'success': False, 'error': str(e), 'traceback': error_detail})
+        
+        finally:
+            self._is_running = False
+            print(f"[WorkerThread-{thread_id}] 线程结束")
 
 class URLItem(QListWidgetItem):
     """
@@ -302,7 +343,7 @@ class PendingTasksDialog(QDialog):
             total = task.get('total', '0')
             
             # 创建显示文本
-            display_text = f"{url}\n状态: {status}, 进度: {progress}% ({downloaded}/{total})"
+            display_text = str(url) + "\n状态: " + str(status) + ", 进度: " + str(progress) + "% (" + str(downloaded) + "/" + str(total) + ")"
             item = QListWidgetItem(display_text)
             self.task_list.addItem(item)
         
@@ -532,7 +573,7 @@ class MainWindow(QMainWindow):
         self.ts_merger = TSMerger(log_callback=self.log, state_manager=self.state_manager)
         self.log("TS合并器初始化完成", "INFO")
         
-        self.log(f"默认下载路径: {self.download_path}", "DEBUG")
+        self.log("默认下载路径: " + self.download_path, "DEBUG")
         
         # 检测临时文件
         self.log("正在检测临时文件...", "INFO")
@@ -565,7 +606,7 @@ class MainWindow(QMainWindow):
                 self.log("没有未完成的任务", "INFO")
                 return
             
-            self.log(f"发现 {len(pending_tasks)} 个未完成的任务", "INFO")
+            self.log("发现 " + str(len(pending_tasks)) + " 个未完成的任务", "INFO")
             
             # 显示未完成任务对话框
             dialog = PendingTasksDialog(pending_tasks, self)
@@ -585,10 +626,10 @@ class MainWindow(QMainWindow):
                     self.log("用户选择忽略未完成任务", "INFO")
             
         except Exception as e:
-            self.log(f"检测未完成任务失败: {e}", "ERROR")
+            self.log("检测未完成任务失败: " + str(e), "ERROR")
             import traceback
             error_detail = traceback.format_exc()
-            self.log(f"[错误详情] {error_detail}", "ERROR")
+            self.log("[错误详情] " + error_detail, "ERROR")
     
     def resume_tasks(self, pending_tasks):
         """
@@ -608,15 +649,15 @@ class MainWindow(QMainWindow):
                 if url:
                     url_item = URLItem(url, task_id)  # 传递task_id
                     self.url_list.addItem(url_item)
-                    self.log(f"已添加未完成任务: {url}", "INFO")
+                    self.log("已添加未完成任务: " + url, "INFO")
                     
                     # 检查临时目录是否存在
                     temp_dir = task.get('temp_dir')
                     if temp_dir and os.path.exists(temp_dir):
-                        self.log(f"发现临时目录: {temp_dir}", "INFO")
-                        self.log(f"将从已下载的ts文件继续下载", "INFO")
+                        self.log("发现临时目录: " + temp_dir, "INFO")
+                        self.log("将从已下载的ts文件继续下载", "INFO")
                     else:
-                        self.log(f"未找到临时目录，将重新下载所有文件", "INFO")
+                        self.log("未找到临时目录，将重新下载所有文件", "INFO")
             
             # 更新任务状态为pending
             for task in pending_tasks:
@@ -624,13 +665,13 @@ class MainWindow(QMainWindow):
                 if task_id:
                     self.state_manager.update_task_status(task_id, 'pending')
             
-            self.log(f"已恢复 {len(pending_tasks)} 个未完成任务", "INFO")
+            self.log("已恢复 " + str(len(pending_tasks)) + " 个未完成任务", "INFO")
             
         except Exception as e:
-            self.log(f"恢复任务失败: {e}", "ERROR")
+            self.log("恢复任务失败: " + str(e), "ERROR")
             import traceback
             error_detail = traceback.format_exc()
-            self.log(f"[错误详情] {error_detail}", "ERROR")
+            self.log("[错误详情] " + error_detail, "ERROR")
     
     def on_merge_finished(self, result):
         """
@@ -640,9 +681,9 @@ class MainWindow(QMainWindow):
             if isinstance(result, dict) and result.get('success'):
                 output_path = result.get('output_path', '')
                 filename = os.path.basename(output_path) if output_path else "未知文件"
-                self.log(f"临时文件合并成功: {filename}", "INFO")
+                self.log("临时文件合并成功: " + filename, "INFO")
                 if output_path:
-                    self.log(f"合并后的文件路径: {output_path}", "DEBUG")
+                    self.log("合并后的文件路径: " + output_path, "DEBUG")
                 QMessageBox.information(self, "成功", "临时文件合并成功")
             else:
                 self.log("临时文件合并成功", "INFO")
@@ -710,6 +751,11 @@ class MainWindow(QMainWindow):
         self.manual_download_button = QPushButton("手动下载")
         self.manual_download_button.clicked.connect(self.manual_download)
         other_controls.addWidget(self.manual_download_button)
+        
+        # 批量下载按钮
+        self.batch_download_button = QPushButton("批量下载")
+        self.batch_download_button.clicked.connect(self.batch_download)
+        other_controls.addWidget(self.batch_download_button)
         
         # 清空按钮
         self.clear_button = QPushButton("清空")
@@ -831,23 +877,23 @@ class MainWindow(QMainWindow):
                         item = URLItem(url)
                         self.url_list.addItem(item)
                         valid_count += 1
-                        self.log(f"添加URL: {url}", "INFO")
+                        self.log("添加URL: " + url, "INFO")
                     else:
-                        self.log(f"URL已存在，跳过: {url}", "WARNING")
+                        self.log("URL已存在，跳过: " + url, "WARNING")
                 else:
                     invalid_urls.append(url)
-                    self.log(f"URL验证失败: {url}", "ERROR")
+                    self.log("URL验证失败: " + url, "ERROR")
             
             # 显示添加结果
             if valid_count > 0:
-                self.log(f"成功添加 {valid_count} 个URL", "INFO")
+                self.log("成功添加 " + str(valid_count) + " 个URL", "INFO")
             
             if invalid_urls:
                 invalid_list = "\n".join(invalid_urls)
                 QMessageBox.warning(
                     self, 
                     "URL验证失败", 
-                    f"以下 {len(invalid_urls)} 个URL格式无效:\n\n{invalid_list}"
+                    "以下 " + str(len(invalid_urls)) + " 个URL格式无效:\n\n" + invalid_list
                 )
             
             if valid_count == 0 and not invalid_urls:
@@ -863,7 +909,7 @@ class MainWindow(QMainWindow):
             return
         
         for item in selected_items:
-            self.log(f"删除URL: {item.text()}", "INFO")
+            self.log("删除URL: " + item.text(), "INFO")
             self.url_list.takeItem(self.url_list.row(item))
     
     def clear_urls(self):
@@ -894,9 +940,112 @@ class MainWindow(QMainWindow):
                 success_count += 1
         
         if success_count > 0:
-            self.log(f"已删除 {success_count} 个下载成功的URL", "INFO")
+            self.log("已删除 " + str(success_count) + " 个下载成功的URL", "INFO")
         else:
             self.log("没有下载成功的URL可删除", "INFO")
+    
+    def batch_download(self):
+        """
+        批量下载功能
+        弹出单行输入栏，要求输入一个视频选单网址，读取网站中包含的其他视频网址
+        """
+        # 弹出输入对话框
+        playlist_url, ok = QInputDialog.getText(
+            self,
+            "批量下载",
+            "请输入视频选单网址:"
+        )
+        
+        if ok and playlist_url:
+            playlist_url = playlist_url.strip()
+            
+            # 检查URL是否为空
+            if not playlist_url:
+                QMessageBox.warning(self, "警告", "请输入有效的视频选单网址")
+                return
+            
+            # 检测URL是否合法
+            if not utils.is_valid_url(playlist_url):
+                QMessageBox.warning(self, "警告", "请输入有效的视频选单网址")
+                return
+            
+            self.log("开始从视频选单提取视频链接: " + playlist_url, "INFO")
+            
+            # 启动工作线程提取视频链接
+            def extract_video_links():
+                browser = None
+                thread_id = threading.current_thread().ident
+                print(f"[BatchDownload-{thread_id}] 开始提取视频链接")
+                
+                try:
+                    # 初始化浏览器
+                    print(f"[BatchDownload-{thread_id}] 初始化浏览器...")
+                    browser = SyncBrowserSimulator()
+                    browser.init_browser()
+                    print(f"[BatchDownload-{thread_id}] 浏览器初始化完成")
+                    
+                    # 加载页面
+                    print(f"[BatchDownload-{thread_id}] 加载页面: {playlist_url}")
+                    success = browser.load_page(playlist_url)
+                    if not success:
+                        print(f"[BatchDownload-{thread_id}] 页面加载失败")
+                        return {'success': False, 'error': '页面加载失败', 'log': '页面加载失败'}
+                    
+                    # 获取页面内容
+                    print(f"[BatchDownload-{thread_id}] 获取页面内容...")
+                    html = browser.get_page_content()
+                    if not html:
+                        print(f"[BatchDownload-{thread_id}] 无法获取页面内容")
+                        return {'success': False, 'error': '无法获取页面内容', 'log': '无法获取页面内容'}
+                    
+                    print(f"[BatchDownload-{thread_id}] 页面内容大小: {len(html)} 字节")
+                    
+                    # 提取视频链接
+                    print(f"[BatchDownload-{thread_id}] 提取视频链接...")
+                    video_links = self.extract_video_links_from_page(html, playlist_url)
+                    
+                    if not video_links:
+                        print(f"[BatchDownload-{thread_id}] 未找到视频链接")
+                        return {'success': False, 'error': '未找到视频链接', 'log': '未找到视频链接'}
+                    
+                    print(f"[BatchDownload-{thread_id}] 成功提取 {len(video_links)} 个视频链接")
+                    return {'success': True, 'video_links': video_links, 'log': '成功提取 ' + str(len(video_links)) + ' 个视频链接'}
+                    
+                except Exception as e:
+                    import traceback
+                    error_detail = traceback.format_exc()
+                    print(f"[BatchDownload-{thread_id}] 提取视频链接失败: {e}\n{error_detail}")
+                    return {'success': False, 'error': '提取视频链接失败: ' + str(e), 'log': '提取视频链接失败: ' + str(e), 'traceback': error_detail}
+                    
+                finally:
+                    # 确保浏览器正确关闭 - 使用 quit() 彻底释放资源
+                    if browser is not None:
+                        print(f"[BatchDownload-{thread_id}] 关闭浏览器...")
+                        try:
+                            # 先尝试 quit() 彻底关闭浏览器进程
+                            if hasattr(browser, 'driver') and browser.driver:
+                                browser.driver.quit()
+                                print(f"[BatchDownload-{thread_id}] 浏览器已完全关闭")
+                        except Exception as quit_error:
+                            print(f"[BatchDownload-{thread_id}] 浏览器 quit() 失败: {quit_error}")
+                            # 如果 quit 失败，尝试 close
+                            try:
+                                browser.close()
+                                print(f"[BatchDownload-{thread_id}] 浏览器已关闭 (close)")
+                            except Exception as close_error:
+                                print(f"[BatchDownload-{thread_id}] 浏览器 close() 也失败: {close_error}")
+                        finally:
+                            # 强制释放引用
+                            browser = None
+                            print(f"[BatchDownload-{thread_id}] 浏览器引用已释放")
+            
+            # 启动线程
+            print("[Main] 启动批量下载工作线程...")
+            self.worker_thread = WorkerThread(extract_video_links, main_window=self)
+            self.worker_thread.finished.connect(self.on_batch_download_finished)
+            self.worker_thread.error_occurred.connect(lambda msg, detail: self.log(f"[批量下载错误] {msg}", "ERROR"))
+            self.worker_thread.start()
+            print("[Main] 批量下载工作线程已启动")
     
     def load_download_history(self):
         """
@@ -910,9 +1059,9 @@ class MainWindow(QMainWindow):
                         url = line.strip()
                         if url:
                             self.download_history.add(url)
-                self.log(f"已加载 {len(self.download_history)} 条下载历史记录", "DEBUG")
+                self.log("已加载 " + str(len(self.download_history)) + " 条下载历史记录", "DEBUG")
         except Exception as e:
-            self.log(f"加载下载历史记录失败: {str(e)}", "ERROR")
+            self.log("加载下载历史记录失败: " + str(e), "ERROR")
     
     def save_download_history(self):
         """
@@ -925,9 +1074,9 @@ class MainWindow(QMainWindow):
             with open(self.history_file, 'w', encoding='utf-8') as f:
                 for url in self.download_history:
                     f.write(url + '\n')
-            self.log(f"已保存 {len(self.download_history)} 条下载历史记录", "DEBUG")
+            self.log("已保存 " + str(len(self.download_history)) + " 条下载历史记录", "DEBUG")
         except Exception as e:
-            self.log(f"保存下载历史记录失败: {str(e)}", "ERROR")
+            self.log("保存下载历史记录失败: " + str(e), "ERROR")
     
     def add_to_history(self, url):
         """
@@ -936,13 +1085,226 @@ class MainWindow(QMainWindow):
         if url not in self.download_history:
             self.download_history.add(url)
             self.save_download_history()
-            self.log(f"已添加到下载历史: {url}", "DEBUG")
+            self.log("已添加到下载历史: " + url, "DEBUG")
     
     def is_in_history(self, url):
         """
         检查URL是否在下载历史记录中
         """
         return url in self.download_history
+    
+    def extract_video_links_from_page(self, html, base_url):
+        """
+        智能分析页面结构，提取相似度最高的视频链接组
+        
+        逻辑：
+        1. 提取页面中所有链接
+        2. 分析链接的URL结构相似度
+        3. 找出数量最多、结构最相似的链接组
+        4. 返回该组链接作为批量下载目标
+        
+        Args:
+            html: 页面HTML内容
+            base_url: 基础URL，用于解析相对链接
+        
+        Returns:
+            视频链接列表（按相似度排序）
+        """
+        import re
+        from urllib.parse import urljoin, urlparse
+        from collections import defaultdict
+        
+        self.log("开始智能分析页面链接结构...", "INFO")
+        
+        # 提取所有<a>标签中的href属性
+        all_links = []
+        
+        # 正则表达式匹配<a>标签中的href属性
+        href_pattern = re.compile(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>', re.IGNORECASE)
+        matches = href_pattern.findall(html)
+        
+        for href in matches:
+            # 解析相对链接
+            absolute_url = urljoin(base_url, href)
+            all_links.append(absolute_url)
+        
+        self.log(f"共提取到 {len(all_links)} 个原始链接", "DEBUG")
+        
+        if not all_links:
+            return []
+        
+        # 分析链接结构相似度
+        # 策略：按URL路径模式分组
+        url_patterns = defaultdict(list)
+        
+        for url in all_links:
+            try:
+                parsed = urlparse(url)
+                # 构建URL模式：域名 + 路径结构（去掉具体ID）
+                # 例如：https://example.com/video/12345 → pattern: example.com/video/[数字]
+                path_parts = parsed.path.split('/')
+                normalized_parts = []
+                
+                for part in path_parts:
+                    if not part:
+                        continue
+                    # 将数字ID替换为占位符
+                    if re.match(r'^\d+$', part):
+                        normalized_parts.append('[ID]')
+                    elif re.match(r'^[a-f0-9]{8,}$', part, re.IGNORECASE):  # MD5/哈希
+                        normalized_parts.append('[HASH]')
+                    else:
+                        normalized_parts.append(part)
+                
+                # 构建模式键
+                pattern_key = f"{parsed.netloc}/{'/'.join(normalized_parts)}"
+                url_patterns[pattern_key].append(url)
+                
+            except Exception as e:
+                continue
+        
+        self.log(f"分析出 {len(url_patterns)} 种不同的URL结构模式", "DEBUG")
+        
+        # 找出数量最多的模式组
+        if not url_patterns:
+            return []
+        
+        # 按链接数量排序，找出最可能的视频列表组
+        sorted_patterns = sorted(url_patterns.items(), key=lambda x: len(x[1]), reverse=True)
+        
+        # 过滤掉数量太少的组（少于2个链接的组不太可能是视频列表）
+        valid_groups = [(pattern, urls) for pattern, urls in sorted_patterns if len(urls) >= 2]
+        
+        if not valid_groups:
+            self.log("未找到有效的视频链接组（至少需要2个相似链接）", "WARNING")
+            return []
+        
+        # 选择数量最多的组
+        best_pattern, best_urls = valid_groups[0]
+        
+        self.log(f"找到最匹配的URL模式: {best_pattern}", "INFO")
+        self.log(f"该模式包含 {len(best_urls)} 个链接", "INFO")
+        
+        # 去重并保持顺序
+        seen = set()
+        unique_links = []
+        for url in best_urls:
+            if url not in seen:
+                seen.add(url)
+                unique_links.append(url)
+        
+        # 进一步过滤：检查是否可能是视频链接
+        video_links = []
+        for url in unique_links:
+            if self.is_likely_video_page(url):
+                video_links.append(url)
+        
+        # 如果没有找到视频链接，返回所有唯一链接
+        if not video_links:
+            self.log("未识别到明显的视频页面链接，返回所有相似链接", "WARNING")
+            video_links = unique_links
+        
+        self.log(f"最终提取到 {len(video_links)} 个视频链接", "INFO")
+        
+        # 显示前几个链接作为示例
+        for i, link in enumerate(video_links[:3]):
+            self.log(f"  示例 {i+1}: {link[:80]}...", "DEBUG")
+        
+        return video_links
+    
+    def is_likely_video_page(self, url):
+        """
+        判断URL是否可能是视频页面
+        
+        Args:
+            url: 待判断的URL
+        
+        Returns:
+            是否可能是视频页面
+        """
+        import re
+        
+        url_lower = url.lower()
+        
+        # 视频相关关键词
+        video_keywords = [
+            r'video', r'watch', r'play', r'movie', r'film', r'episode',
+            r'clip', r'media', r'stream', r'vod', r'player', r'view',
+            r'\bv\d+', r'\bep\d+', r'\bs\d+', r'\b\d+_\d+',  # 常见视频ID格式
+            r'av\d+', r'bv\w+',  # B站格式
+            r'\d{4,}',  # 包含4位以上数字（可能是视频ID）
+        ]
+        
+        # 排除非视频链接
+        exclude_patterns = [
+            r'\.css', r'\.js', r'\.png', r'\.jpg', r'\.gif', r'\.ico',
+            r'login', r'register', r'logout', r'admin', r'api/',
+            r'javascript:', r'mailto:', r'tel:',
+            r'/user/', r'/profile/', r'/account/',
+            r'/search', r'/category/', r'/tag/',
+        ]
+        
+        # 检查排除项
+        for pattern in exclude_patterns:
+            if re.search(pattern, url_lower):
+                return False
+        
+        # 检查视频关键词
+        for keyword in video_keywords:
+            if re.search(keyword, url_lower):
+                return True
+        
+        # 默认返回True（如果URL结构相似，很可能是同一类页面）
+        return True
+    
+    def on_batch_download_finished(self, result):
+        """
+        批量下载完成回调
+        
+        Args:
+            result: 提取视频链接的结果
+        """
+        # 输出日志信息
+        if 'log' in result:
+            log_level = "INFO" if result.get('success') else "ERROR"
+            self.log(result['log'], log_level)
+        
+        # 输出错误详情（如果有）
+        if 'traceback' in result:
+            self.log("[错误详情] " + result['traceback'], "ERROR")
+        
+        if result.get('success'):
+            video_links = result.get('video_links', [])
+            
+            # 添加视频链接到URL列表
+            added_count = 0
+            for link in video_links:
+                # 检查URL是否已存在
+                url_exists = False
+                for i in range(self.url_list.count()):
+                    existing_item = self.url_list.item(i)
+                    if isinstance(existing_item, URLItem) and existing_item.url == link:
+                        url_exists = True
+                        break
+                
+                if not url_exists:
+                    item = URLItem(link)
+                    self.url_list.addItem(item)
+                    added_count += 1
+                    self.log("添加视频链接: " + link, "INFO")
+                else:
+                    self.log("视频链接已存在，跳过: " + link, "WARNING")
+            
+            if added_count > 0:
+                self.log("成功添加 " + str(added_count) + " 个视频链接到下载列表", "INFO")
+                QMessageBox.information(self, "成功", "成功从视频选单提取并添加 " + str(added_count) + " 个视频链接")
+            else:
+                self.log("没有新的视频链接可添加", "INFO")
+                QMessageBox.information(self, "提示", "没有新的视频链接可添加")
+        else:
+            error = result.get('error', '未知错误')
+            self.log("批量下载失败: " + error, "ERROR")
+            QMessageBox.warning(self, "失败", "批量下载失败: " + error)
     
     def manual_download(self):
         """
@@ -958,7 +1320,7 @@ class MainWindow(QMainWindow):
         for item in selected_items:
             if isinstance(item, URLItem):
                 url = item.url
-                self.log(f"开始手动下载: {url}", "INFO")
+                self.log("开始手动下载: " + url, "INFO")
                 item.update_status(URLItem.STATUS_DOWNLOADING)
                 
                 # 启动手动下载线程
@@ -970,21 +1332,21 @@ class MainWindow(QMainWindow):
                         # 加载页面
                         success = self.browser.load_page(url)
                         if not success:
-                            self.log(f"页面加载失败: {url}", "ERROR")
+                            self.log("页面加载失败: " + url, "ERROR")
                             item.update_status(URLItem.STATUS_FAILED)
                             return
                         
                         # 获取页面内容
                         html = self.browser.get_page_content()
                         if not html:
-                            self.log(f"无法获取页面内容: {url}", "ERROR")
+                            self.log("无法获取页面内容: " + url, "ERROR")
                             item.update_status(URLItem.STATUS_FAILED)
                             return
                         
                         # 探测视频资源
                         videos = self.browser.get_video_resources()
                         if not videos:
-                            self.log(f"未找到视频资源: {url}", "ERROR")
+                            self.log("未找到视频资源: " + url, "ERROR")
                             item.update_status(URLItem.STATUS_FAILED)
                             return
                         
@@ -998,10 +1360,10 @@ class MainWindow(QMainWindow):
                         
                         # 启用下载按钮
                         self.download_button.setEnabled(True)
-                        self.log(f"找到 {len(videos)} 个视频资源，请选择要下载的视频", "INFO")
+                        self.log("找到 " + str(len(videos)) + " 个视频资源，请选择要下载的视频", "INFO")
                         item.update_status(URLItem.STATUS_PENDING)
                     except Exception as e:
-                        self.log(f"手动下载失败: {str(e)}", "ERROR")
+                        self.log("手动下载失败: " + str(e), "ERROR")
                         item.update_status(URLItem.STATUS_FAILED)
                     finally:
                         try:
@@ -1032,14 +1394,14 @@ class MainWindow(QMainWindow):
             "DEBUG": "#006400"   # 深绿色
         }
         color = level_colors.get(level, "#000000")
-        log_message = f"<font color='{color}'>[{timestamp}] [{level}] {message}</font>\n"
+        log_message = "<font color='" + color + "'>[" + timestamp + "] [" + level + "] " + message + "</font>\n"
         self.console.append(log_message)
         self.console.verticalScrollBar().setValue(self.console.verticalScrollBar().maximum())
         # 同时输出到控制台
-        print(f"[{timestamp}] [{level}] {message}")
+        print("[" + timestamp + "] [" + level + "] " + message)
         # 写入日志文件
         try:
-            log_entry = f"[{timestamp}] [{level}] {message}\n"
+            log_entry = "[" + timestamp + "] [" + level + "] " + message + "\n"
             with open(LOG_FILE, "a", encoding="utf-8") as f:
                 f.write(log_entry)
             
@@ -1102,8 +1464,8 @@ class MainWindow(QMainWindow):
         if path:
             self.download_path = path
             self.path_input.setText(path)
-            self.log(f"保存路径已设置为: {path}", "INFO")
-            self.log(f"新的保存路径: {path}", "DEBUG")
+            self.log("保存路径已设置为: " + path, "INFO")
+            self.log("新的保存路径: " + path, "DEBUG")
     
     def start_detection(self):
         """
@@ -1130,10 +1492,10 @@ class MainWindow(QMainWindow):
         
         # 显示状态
         self.log("======================================", "INFO")
-        self.log(f"开始探测视频资源，共 {len(url_items)} 个URL", "INFO")
+        self.log("开始探测视频资源，共 " + str(len(url_items)) + " 个URL", "INFO")
         for item in url_items:
-            self.log(f"目标URL: {item.url}", "DEBUG")
-        self.log(f"保存路径: {self.download_path}", "DEBUG")
+            self.log("目标URL: " + item.url, "DEBUG")
+        self.log("保存路径: " + self.download_path, "DEBUG")
         self.log("======================================", "INFO")
         self.log("[步骤1/4] 正在初始化浏览器...", "INFO")
         self.progress_label.setText("正在初始化浏览器...")
@@ -1158,11 +1520,11 @@ class MainWindow(QMainWindow):
                         valid_url_items.append(url_item)
                     else:
                         invalid_urls.append(url)
-                        self.log(f"[无效URL] 跳过无效链接: {url}", "ERROR")
+                        self.log("[无效URL] 跳过无效链接: " + url, "ERROR")
                         url_item.update_status(URLItem.STATUS_FAILED)
                 
                 if invalid_urls:
-                    self.log(f"[预处理] 发现 {len(invalid_urls)} 个无效URL", "WARNING")
+                    self.log("[预处理] 发现 " + str(len(invalid_urls)) + " 个无效URL", "WARNING")
                 
                 if not valid_url_items:
                     self.log("[错误] 没有有效的URL可供处理", "ERROR")
@@ -1174,25 +1536,25 @@ class MainWindow(QMainWindow):
                         'total_count': len(url_items)
                     }
                 
-                self.log(f"[预处理] 验证完成，有效URL: {len(valid_url_items)}/{len(url_items)}", "INFO")
+                self.log("[预处理] 验证完成，有效URL: " + str(len(valid_url_items)) + "/" + str(len(url_items)), "INFO")
                 
                 # 处理每个有效的URL
                 for url_index, url_item in enumerate(valid_url_items):
                     url = url_item.url
-                    self.log(f"======================================", "INFO")
-                    self.log(f"处理URL {url_index + 1}/{len(valid_url_items)}: {url}", "INFO")
+                    self.log("======================================", "INFO")
+                    self.log("处理URL " + str(url_index + 1) + "/" + str(len(valid_url_items)) + ": " + url, "INFO")
                     
                     # 检查URL是否可访问（简单的网络检查）
                     try:
                         import requests
-                        self.log(f"[网络检查] 正在检查URL可访问性...", "DEBUG")
+                        self.log("[网络检查] 正在检查URL可访问性...", "DEBUG")
                         head_response = requests.head(url, timeout=10, allow_redirects=True)
                         if head_response.status_code >= 400:
-                            self.log(f"[网络检查] URL返回错误状态码: {head_response.status_code}", "WARNING")
+                            self.log("[网络检查] URL返回错误状态码: " + str(head_response.status_code), "WARNING")
                         else:
-                            self.log(f"[网络检查] URL可访问，状态码: {head_response.status_code}", "DEBUG")
+                            self.log("[网络检查] URL可访问，状态码: " + str(head_response.status_code), "DEBUG")
                     except Exception as net_error:
-                        self.log(f"[网络检查] 无法访问URL: {net_error}", "WARNING")
+                        self.log("[网络检查] 无法访问URL: " + str(net_error), "WARNING")
                         # 不终止，继续尝试
                     
                     # 检查是否是恢复的任务（URLItem中有task_id）
@@ -1203,7 +1565,7 @@ class MainWindow(QMainWindow):
                         
                         # 更新任务状态为downloading
                         self.state_manager.update_task_status(task_id, 'downloading')
-                        self.log(f"[任务] 恢复任务: {task_id}", "DEBUG")
+                        self.log("[任务] 恢复任务: " + task_id, "DEBUG")
                     else:
                         # 创建新的任务ID（使用时间戳和URL的哈希值）
                         import hashlib
@@ -1222,7 +1584,7 @@ class MainWindow(QMainWindow):
                             'temp_dir': None  # 临时目录，在开始下载时设置
                         }
                         self.state_manager.save_task(task_id, task_info)
-                        self.log(f"[任务] 已创建任务: {task_id}", "DEBUG")
+                        self.log("[任务] 已创建任务: " + task_id, "DEBUG")
                     
                     # 为每个URL创建一个新的浏览器实例（使用上下文管理器确保自动关闭）
                     self.log("[步骤1/4] 正在初始化浏览器...", "INFO")
@@ -1238,8 +1600,8 @@ class MainWindow(QMainWindow):
                             url_item.update_status(URLItem.STATUS_DOWNLOADING)
                             
                             # 加载页面
-                            self.log(f"[步骤2/4] 正在加载页面: {url}", "INFO")
-                            self.log(f"请求URL: {url}", "DEBUG")
+                            self.log("[步骤2/4] 正在加载页面: " + url, "INFO")
+                            self.log("请求URL: " + url, "DEBUG")
                             success = current_browser.load_page(url)
                             if not success:
                                 self.log("[步骤2/4] 页面加载失败", "ERROR")
@@ -1259,8 +1621,8 @@ class MainWindow(QMainWindow):
                                 url_item.update_status(URLItem.STATUS_FAILED)
                                 failed_urls.append(url)
                                 continue
-                            self.log(f"[步骤3/4] 页面内容获取完成，大小: {len(html)} 字符", "INFO")
-                            self.log(f"页面内容长度: {len(html)} 字符", "DEBUG")
+                            self.log("[步骤3/4] 页面内容获取完成，大小: " + str(len(html)) + " 字符", "INFO")
+                            self.log("页面内容长度: " + str(len(html)) + " 字符", "DEBUG")
                             
                             # 探测视频资源（使用browser中的video_resources，已经过滤为只包含m3u8和key关键词）
                             self.log("[步骤4/4] 正在探测视频资源...", "INFO")
@@ -1268,32 +1630,32 @@ class MainWindow(QMainWindow):
                             
                             try:
                                 videos = current_browser.get_video_resources()
-                                self.log(f"[步骤4/4] 视频资源探测完成，找到 {len(videos)} 个资源", "INFO")
-                                self.log(f"找到 {len(videos)} 个视频资源", "DEBUG")
+                                self.log("[步骤4/4] 视频资源探测完成，找到 " + str(len(videos)) + " 个资源", "INFO")
+                                self.log("找到 " + str(len(videos)) + " 个视频资源", "DEBUG")
                                 
                                 # 验证视频资源
                                 valid_videos = []
                                 for i, video in enumerate(videos):
                                     video_url = video.get('url', '')
                                     if not video_url:
-                                        self.log(f"[资源检查] 视频 {i+1} 没有URL，跳过", "WARNING")
+                                        self.log("[资源检查] 视频 " + str(i+1) + " 没有URL，跳过", "WARNING")
                                         continue
                                     
                                     # 验证视频URL格式
                                     if not utils.is_valid_url(video_url):
-                                        self.log(f"[资源检查] 视频 {i+1} URL格式无效: {video_url}", "WARNING")
+                                        self.log("[资源检查] 视频 " + str(i+1) + " URL格式无效: " + video_url, "WARNING")
                                         continue
                                     
                                     valid_videos.append(video)
-                                    self.log(f"[资源检查] 视频 {i+1} URL有效: {video_url[:80]}...", "DEBUG")
+                                    self.log("[资源检查] 视频 " + str(i+1) + " URL有效: " + video_url[:80] + "...", "DEBUG")
                                 
                                 if len(valid_videos) != len(videos):
-                                    self.log(f"[资源检查] 过滤后有效视频: {len(valid_videos)}/{len(videos)}", "INFO")
+                                    self.log("[资源检查] 过滤后有效视频: " + str(len(valid_videos)) + "/" + str(len(videos)), "INFO")
                                 
                                 videos = valid_videos
                                 
                             except Exception as video_error:
-                                self.log(f"[错误] 获取视频资源失败: {video_error}", "ERROR")
+                                self.log("[错误] 获取视频资源失败: " + str(video_error), "ERROR")
                                 url_item.update_status(URLItem.STATUS_FAILED)
                                 failed_urls.append(url)
                                 continue
@@ -1311,7 +1673,7 @@ class MainWindow(QMainWindow):
                                 if 'getmovie' in video_url.lower():
                                     # 找到getmovie链接，自动下载
                                     self.log("[模式] 检测到getmovie链接，自动开始下载", "INFO")
-                                    self.log(f"[链接] 视频URL: {video_url}", "DEBUG")
+                                    self.log("[链接] 视频URL: " + video_url, "DEBUG")
                                     download_success = self.download_video_automatically(video_url, task_id)
                                     if download_success:
                                         url_item.update_status(URLItem.STATUS_SUCCESS)
@@ -1323,13 +1685,13 @@ class MainWindow(QMainWindow):
                                         self.state_manager.update_task_status(task_id, 'success')
                                         # 清除已下载分片记录
                                         self.state_manager.clear_downloaded_segments(task_id)
-                                        self.log(f"[任务] 任务 {task_id} 已完成", "DEBUG")
+                                        self.log("[任务] 任务 " + task_id + " 已完成", "DEBUG")
                                     else:
                                         url_item.update_status(URLItem.STATUS_FAILED)
                                         failed_urls.append(url)
                                         # 更新任务状态为失败
                                         self.state_manager.update_task_status(task_id, 'failed')
-                                        self.log(f"[任务] 任务 {task_id} 已失败", "DEBUG")
+                                        self.log("[任务] 任务 " + task_id + " 已失败", "DEBUG")
                                     break
                         
                         # 如果没有getmovie链接，检查是否有唯一的m3u8文件
@@ -1365,9 +1727,9 @@ class MainWindow(QMainWindow):
                                     if not result.get('success') and 'temp_subdir' in result and result['temp_subdir']:
                                         try:
                                             self.ts_merger.delete_temp_subdir(result['temp_subdir'])
-                                            self.log(f"[清理] 已删除临时目录: {result['temp_subdir']}", "INFO")
+                                            self.log("[清理] 已删除临时目录: " + result['temp_subdir'], "INFO")
                                         except Exception as e:
-                                            self.log(f"[清理] 删除临时目录失败: {e}", "ERROR")
+                                            self.log("[清理] 删除临时目录失败: " + str(e), "ERROR")
                                     
                                     if result.get('success'):
                                         url_item.update_status(URLItem.STATUS_SUCCESS)
@@ -1380,20 +1742,20 @@ class MainWindow(QMainWindow):
                                         self.state_manager.clear_downloaded_segments(task_id)
                                         # 清理任务记录
                                         self.state_manager.remove_task(task_id)
-                                        self.log(f"[任务] 任务 {task_id} 已完成并清理", "DEBUG")
+                                        self.log("[任务] 任务 " + task_id + " 已完成并清理", "DEBUG")
                                     else:
                                         url_item.update_status(URLItem.STATUS_FAILED)
                                         failed_urls.append(url)
-                                        self.log(f"[错误] 下载失败: {result.get('error', '未知错误')}", "ERROR")
+                                        self.log("[错误] 下载失败: " + result.get('error', '未知错误'), "ERROR")
                                         # 更新任务状态为失败
                                         self.state_manager.update_task_status(task_id, 'failed')
-                                        self.log(f"[任务] 任务 {task_id} 已失败", "DEBUG")
+                                        self.log("[任务] 任务 " + task_id + " 已失败", "DEBUG")
                                 except Exception as e:
                                     # 捕获所有异常，确保程序不会崩溃
-                                    self.log(f"[错误] 下载过程中发生异常: {str(e)}", "ERROR")
+                                    self.log("[错误] 下载过程中发生异常: " + str(e), "ERROR")
                                     import traceback
                                     error_detail = traceback.format_exc()
-                                    self.log(f"[错误详情] {error_detail}", "ERROR")
+                                    self.log("[错误详情] " + error_detail, "ERROR")
                                     url_item.update_status(URLItem.STATUS_FAILED)
                                     failed_urls.append(url)
                                 finally:
@@ -1404,7 +1766,7 @@ class MainWindow(QMainWindow):
                                             self.ts_merger.ffmpeg_process.wait(timeout=5)
                                             self.ts_merger.ffmpeg_process = None
                                         except Exception as terminate_error:
-                                            self.log(f"[错误] 终止ffmpeg进程失败: {str(terminate_error)}", "ERROR")
+                                            self.log("[错误] 终止ffmpeg进程失败: " + str(terminate_error), "ERROR")
                                     # 重置停止标志
                                     self.ts_merger.should_stop = False
                             else:
@@ -1421,15 +1783,15 @@ class MainWindow(QMainWindow):
                                 
                                 # 启用下载按钮
                                 self.download_button.setEnabled(True)
-                                self.log(f"找到 {len(videos)} 个视频资源，请选择要下载的视频", "INFO")
+                                self.log("找到 " + str(len(videos)) + " 个视频资源，请选择要下载的视频", "INFO")
                                 # 不要使用continue，否则会跳过后续URL
                                 # continue
                     except Exception as e:
                         # 出现错误，标记为失败并继续
-                        self.log(f"[错误] 处理URL时发生错误: {str(e)}", "ERROR")
+                        self.log("[错误] 处理URL时发生错误: " + str(e), "ERROR")
                         import traceback
                         error_detail = traceback.format_exc()
-                        self.log(f"[错误详情] {error_detail}", "ERROR")
+                        self.log("[错误详情] " + error_detail, "ERROR")
                         url_item.update_status(URLItem.STATUS_FAILED)
                         failed_urls.append(url)
                 
@@ -1448,10 +1810,10 @@ class MainWindow(QMainWindow):
                     self.browser.close()
                 except:
                     pass
-                self.log(f"[错误] 探测过程中发生错误: {str(e)}", "ERROR")
+                self.log("[错误] 探测过程中发生错误: " + str(e), "ERROR")
                 import traceback
                 error_detail = traceback.format_exc()
-                self.log(f"[错误详情] {error_detail}", "ERROR")
+                self.log("[错误详情] " + error_detail, "ERROR")
                 
                 # 标记所有未处理的URL为失败
                 for item in url_items:
@@ -1493,8 +1855,8 @@ class MainWindow(QMainWindow):
         
         while retry_count < max_retries:
             try:
-                retry_info = f"第 {retry_count + 1}/{max_retries} 次尝试" if retry_count > 0 else "首次尝试"
-                self.log(f"[自动下载] {retry_info}", "INFO")
+                retry_info = "第 " + str(retry_count + 1) + "/" + str(max_retries) + " 次尝试" if retry_count > 0 else "首次尝试"
+                self.log("[自动下载] " + retry_info, "INFO")
                 
                 # 检查是否为getmovie链接
                 if 'getmovie' not in video_url.lower():
@@ -1508,7 +1870,7 @@ class MainWindow(QMainWindow):
                 # 获取getmovie JSON数据（每次重试都重新获取，获取最新的动态资源）
                 import requests
                 import json
-                self.log(f"[请求] 正在获取getmovie数据: {video_url}", "INFO")
+                self.log("[请求] 正在获取getmovie数据: " + video_url, "INFO")
                 response = requests.get(video_url, timeout=30)
                 response.raise_for_status()
                 json_data = response.json()
@@ -1522,8 +1884,8 @@ class MainWindow(QMainWindow):
                 from urllib.parse import urljoin
                 m3u8_url = urljoin(video_url, m3u8_path)
                 
-                self.log(f"[解析] 从getmovie JSON中提取到M3U8路径: {m3u8_path}", "INFO")
-                self.log(f"[构造] 完整的M3U8 URL: {m3u8_url}", "INFO")
+                self.log("[解析] 从getmovie JSON中提取到M3U8路径: " + m3u8_path, "INFO")
+                self.log("[构造] 完整的M3U8 URL: " + m3u8_url, "INFO")
                 
                 # 使用TS合并器下载
                 self.log("[模式] 检测到M3U8播放列表，使用TS分片合并模式", "INFO")
@@ -1540,9 +1902,9 @@ class MainWindow(QMainWindow):
                     # 更新任务进度到状态管理器
                     self.state_manager.update_task_progress(task_id, percentage, downloaded, total)
                 
-                self.log(f"[准备] 目标URL: {m3u8_url}", "INFO")
-                self.log(f"[准备] 保存路径: {self.download_path}", "INFO")
-                self.log(f"M3U8 URL: {m3u8_url}", "DEBUG")
+                self.log("[准备] 目标URL: " + m3u8_url, "INFO")
+                self.log("[准备] 保存路径: " + self.download_path, "INFO")
+                self.log("M3U8 URL: " + m3u8_url, "DEBUG")
                 
                 # 设置当前任务ID
                 self.ts_merger.current_task_id = task_id
@@ -1557,51 +1919,51 @@ class MainWindow(QMainWindow):
                 if not result.get('success') and 'temp_subdir' in result and result['temp_subdir']:
                     try:
                         self.ts_merger.delete_temp_subdir(result['temp_subdir'])
-                        self.log(f"[清理] 已删除临时目录: {result['temp_subdir']}", "INFO")
+                        self.log("[清理] 已删除临时目录: " + result['temp_subdir'], "INFO")
                     except Exception as e:
-                        self.log(f"[清理] 删除临时目录失败: {e}", "ERROR")
+                        self.log("[清理] 删除临时目录失败: " + str(e), "ERROR")
                 
                 if result.get('success'):
-                    self.log(f"[成功] 视频下载完成（{retry_info}）", "INFO")
+                    self.log("[成功] 视频下载完成（" + retry_info + "）", "INFO")
                     return True
                 else:
                     error_msg = result.get('error', '未知错误')
                     last_error = error_msg
-                    self.log(f"[失败] 视频下载失败（{retry_info}）: {error_msg}", "ERROR")
+                    self.log("[失败] 视频下载失败（" + retry_info + "）: " + error_msg, "ERROR")
                     
                     # 如果还有重试次数，等待后重试
                     if retry_count < max_retries - 1:
                         # 使用随机间隔时间（500ms-1000ms）
                         wait_time = retry_delay + random.uniform(0, 0.5)
-                        self.log(f"[重试] 等待 {wait_time:.2f} 秒后重新获取资源...", "INFO")
+                        self.log("[重试] 等待 " + str(round(wait_time, 2)) + " 秒后重新获取资源...", "INFO")
                         time.sleep(wait_time)
                         retry_count += 1
-                        self.log(f"[重试] 开始第 {retry_count + 1} 次尝试", "INFO")
+                        self.log("[重试] 开始第 " + str(retry_count + 1) + " 次尝试", "INFO")
                     else:
-                        self.log(f"[失败] 已达到最大重试次数 ({max_retries})，下载失败", "ERROR")
+                        self.log("[失败] 已达到最大重试次数 (" + str(max_retries) + ")，下载失败", "ERROR")
                         return False
                         
             except Exception as e:
                 last_error = str(e)
-                self.log(f"[错误] 自动下载失败（{retry_info}）: {str(e)}", "ERROR")
+                self.log("[错误] 自动下载失败（" + retry_info + "）: " + str(e), "ERROR")
                 import traceback
                 error_detail = traceback.format_exc()
-                self.log(f"[错误详情] {error_detail}", "ERROR")
+                self.log("[错误详情] " + error_detail, "ERROR")
                 
                 # 如果还有重试次数，等待后重试
                 if retry_count < max_retries - 1:
                     # 使用随机间隔时间（500ms-1000ms）
                     wait_time = retry_delay + random.uniform(0, 0.5)
-                    self.log(f"[重试] 等待 {wait_time:.2f} 秒后重新获取资源...", "INFO")
+                    self.log("[重试] 等待 " + str(round(wait_time, 2)) + " 秒后重新获取资源...", "INFO")
                     time.sleep(wait_time)
                     retry_count += 1
-                    self.log(f"[重试] 开始第 {retry_count + 1} 次尝试", "INFO")
+                    self.log("[重试] 开始第 " + str(retry_count + 1) + " 次尝试", "INFO")
                 else:
-                    self.log(f"[失败] 已达到最大重试次数 ({max_retries})，下载失败", "ERROR")
+                    self.log("[失败] 已达到最大重试次数 (" + str(max_retries) + ")，下载失败", "ERROR")
                     return False
         
         # 所有重试都失败了
-        self.log(f"[失败] 自动下载最终失败，最后错误: {last_error}", "ERROR")
+        self.log("[失败] 自动下载最终失败，最后错误: " + last_error, "ERROR")
         return False
     
     def on_detection_finished(self, result):
@@ -1616,24 +1978,24 @@ class MainWindow(QMainWindow):
             success_count = result.get('success_count', 0)
             total_count = result.get('total_count', 0)
             
-            self.log(f"探测完成，共处理 {total_count} 个URL", "INFO")
-            self.log(f"成功: {success_count} 个，失败: {len(failed_urls)} 个", "INFO")
+            self.log("探测完成，共处理 " + str(total_count) + " 个URL", "INFO")
+            self.log("成功: " + str(success_count) + " 个，失败: " + str(len(failed_urls)) + " 个", "INFO")
             
             # 显示状态提示
             if failed_urls:
                 # 有下载失败的网址
                 failed_list = "\n".join(failed_urls)
-                self.log(f"失败的URL: {failed_list}", "ERROR")
-                self.progress_label.setText(f"处理完成，{success_count} 个成功，{len(failed_urls)} 个失败")
+                self.log("失败的URL: " + failed_list, "ERROR")
+                self.progress_label.setText("处理完成，" + str(success_count) + " 个成功，" + str(len(failed_urls)) + " 个失败")
                 QMessageBox.warning(
                     self, 
                     "部分失败", 
-                    f"处理完成，但有 {len(failed_urls)} 个URL下载失败:\n\n{failed_list}"
+                    "处理完成，但有 " + str(len(failed_urls)) + " 个URL下载失败:\n\n" + failed_list
                 )
             else:
                 # 所有网址都下载成功
                 self.log("所有URL下载成功", "INFO")
-                self.progress_label.setText(f"所有 {total_count} 个URL下载成功")
+                self.progress_label.setText("所有 " + str(total_count) + " 个URL下载成功")
                 QMessageBox.information(
                     self, 
                     "全部成功", 
@@ -1642,7 +2004,7 @@ class MainWindow(QMainWindow):
         else:
             error = result.get('error', '未知错误')
             failed_urls = result.get('failed_urls', [])
-            self.log(f"探测失败: {error}", "ERROR")
+            self.log("探测失败: " + error, "ERROR")
             self.progress_label.setText("探测失败")
             
             if failed_urls:
@@ -1681,9 +2043,9 @@ class MainWindow(QMainWindow):
         
         # 显示状态
         self.log("======================================", "INFO")
-        self.log(f"开始下载视频: {video_url}", "INFO")
-        self.log(f"视频URL: {video_url}", "DEBUG")
-        self.log(f"保存路径: {self.download_path}", "DEBUG")
+        self.log("开始下载视频: " + video_url, "INFO")
+        self.log("视频URL: " + video_url, "DEBUG")
+        self.log("保存路径: " + self.download_path, "DEBUG")
         self.log("======================================", "INFO")
         self.progress_label.setText("正在准备下载...")
         self.progress_bar.setValue(0)
@@ -1710,8 +2072,8 @@ class MainWindow(QMainWindow):
                         from urllib.parse import urljoin
                         m3u8_url = urljoin(video_url, m3u8_path)
                         
-                        self.log(f"[解析] 从getmovie JSON中提取到M3U8路径: {m3u8_path}", "INFO")
-                        self.log(f"[构造] 完整的M3U8 URL: {m3u8_url}", "INFO")
+                        self.log("[解析] 从getmovie JSON中提取到M3U8路径: " + m3u8_path, "INFO")
+                        self.log("[构造] 完整的M3U8 URL: " + m3u8_url, "INFO")
                         
                         # 使用TS合并器下载
                         self.log("[模式] 检测到M3U8播放列表，使用TS分片合并模式", "INFO")
@@ -1722,9 +2084,9 @@ class MainWindow(QMainWindow):
                             # 发射进度更新信号
                             self.worker_thread.progress_updated.emit(percentage, downloaded, total)
                         
-                        self.log(f"[准备] 目标URL: {m3u8_url}", "INFO")
-                        self.log(f"[准备] 保存路径: {self.download_path}", "INFO")
-                        self.log(f"M3U8 URL: {m3u8_url}", "DEBUG")
+                        self.log("[准备] 目标URL: " + m3u8_url, "INFO")
+                        self.log("[准备] 保存路径: " + self.download_path, "INFO")
+                        self.log("M3U8 URL: " + m3u8_url, "DEBUG")
                         
                         # 设置当前任务ID
                         self.ts_merger.current_task_id = task_id
@@ -1748,9 +2110,9 @@ class MainWindow(QMainWindow):
                         # 发射进度更新信号
                         self.worker_thread.progress_updated.emit(percentage, downloaded, total)
                     
-                    self.log(f"[准备] 目标URL: {video_url}", "INFO")
-                    self.log(f"[准备] 保存路径: {self.download_path}", "INFO")
-                    self.log(f"M3U8 URL: {video_url}", "DEBUG")
+                    self.log("[准备] 目标URL: " + video_url, "INFO")
+                    self.log("[准备] 保存路径: " + self.download_path, "INFO")
+                    self.log("M3U8 URL: " + video_url, "DEBUG")
                     
                     result = self.ts_merger.download_and_merge(
                         video_url,
@@ -1767,9 +2129,9 @@ class MainWindow(QMainWindow):
                         # 发射进度更新信号
                         self.worker_thread.progress_updated.emit(percentage, downloaded, total)
                     
-                    self.log(f"[准备] 目标URL: {video_url}", "INFO")
-                    self.log(f"[准备] 保存路径: {self.download_path}", "INFO")
-                    self.log(f"视频URL: {video_url}", "DEBUG")
+                    self.log("[准备] 目标URL: " + video_url, "INFO")
+                    self.log("[准备] 保存路径: " + self.download_path, "INFO")
+                    self.log("视频URL: " + video_url, "DEBUG")
                     
                     result = self.downloader.download_video(
                         video_url,

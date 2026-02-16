@@ -1,6 +1,7 @@
 import os
 import requests
 import time
+import threading
 from datetime import datetime
 from typing import Dict, Optional, Callable
 from tqdm import tqdm
@@ -13,19 +14,53 @@ class VideoDownloader:
         self.retry_delay = 3  # 秒
         self.timeout = 60  # 秒
         self.should_stop = False  # 添加停止标志
-        self.headers = {
+        self._stop_lock = threading.Lock()  # 线程锁保护停止标志
+        self.session = requests.Session()  # 使用Session提高性能
+        self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': '*/*',
             'Accept-Language': 'zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3',
             'Connection': 'keep-alive',
             'Range': 'bytes=0-'  # 支持断点续传
-        }
+        })
+        self.headers = self.session.headers  # 保持兼容性
+    
+    def __del__(self):
+        """
+        析构函数：确保资源释放
+        """
+        self.close()
+    
+    def close(self):
+        """
+        关闭下载器，释放资源
+        """
+        try:
+            if hasattr(self, 'session') and self.session:
+                self.session.close()
+                self.session = None
+        except Exception as e:
+            print(f"[VideoDownloader] 关闭session失败: {e}")
     
     def stop(self):
         """
         设置停止标志
         """
-        self.should_stop = True
+        with self._stop_lock:
+            self.should_stop = True
+        # 关闭session以中断正在进行的请求
+        try:
+            if hasattr(self, 'session') and self.session:
+                self.session.close()
+        except Exception as e:
+            print(f"[VideoDownloader] 停止时关闭session失败: {e}")
+    
+    def is_stopped(self):
+        """
+        检查是否已停止
+        """
+        with self._stop_lock:
+            return self.should_stop
     
     def ensure_download_directory(self, download_path: str) -> bool:
         """
@@ -98,8 +133,16 @@ class VideoDownloader:
         retries = 0
         while retries < self.max_retries:
             try:
+                # 检查是否已停止
+                if self.is_stopped():
+                    print("[下载] 下载器已停止，取消下载")
+                    return {
+                        'success': False,
+                        'error': '下载已取消'
+                    }
+                
                 # 检查是否支持断点续传
-                headers = self.headers.copy()
+                headers = dict(self.session.headers)
                 if os.path.exists(file_path):
                     file_size = os.path.getsize(file_path)
                     headers['Range'] = f'bytes={file_size}-'
@@ -108,7 +151,8 @@ class VideoDownloader:
                     file_size = 0
                     mode = 'wb'  # 写入模式
                 
-                response = requests.get(
+                # 使用session发送请求
+                response = self.session.get(
                     video_url, 
                     headers=headers, 
                     stream=True, 
@@ -137,7 +181,7 @@ class VideoDownloader:
                     ) as pbar:
                         for chunk in response.iter_content(chunk_size=self.chunk_size):
                             # 检查是否应该停止
-                            if self.should_stop:
+                            if self.is_stopped():
                                 print("[下载] 收到停止信号，正在取消下载...")
                                 return {
                                     'success': False,

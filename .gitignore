@@ -71,4 +71,19 @@ Thumbs.db
 AVDownloader/build/
 AVDownloader/dist/
 AVDownloader/*.exe
+AVDownloader/download_state.ini
+AVDownloader/__pycache__/
 *.log
+
+
+
+# Large binary files
+*.exe
+*.zip
+*.7z
+*.tar.gz
+
+# Temporary files
+*.tmp
+*.temp
+*.bak

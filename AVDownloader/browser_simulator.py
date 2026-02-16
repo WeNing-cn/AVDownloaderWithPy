@@ -47,14 +47,21 @@ class BrowserSimulator:
             chrome_options.add_argument('--disable-gpu')
             chrome_options.add_argument('--window-size=1920,1080')
             chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')
+            chrome_options.add_argument('--disable-extensions')
+            chrome_options.add_argument('--disable-software-rasterizer')
+            chrome_options.add_argument('--disable-logging')
+            chrome_options.add_argument('--log-level=3')
             
             # 启用性能日志以捕获网络请求
             chrome_options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
             
+            print("正在创建Chrome WebDriver...")
             self.driver = webdriver.Chrome(options=chrome_options)
             print("浏览器初始化成功")
         except Exception as e:
             print(f"浏览器初始化失败: {e}")
+            import traceback
+            traceback.print_exc()
             raise
     
     def load_page(self, url: str, timeout: int = 60) -> bool:
@@ -65,8 +72,13 @@ class BrowserSimulator:
             if not self.driver:
                 self.init_browser()
             
-            print(f"\n=== 开始加载页面 ===")
-            print(f"URL: {url}")
+            # 验证URL不为空
+            if not url or not isinstance(url, str):
+                print("错误: URL为空或格式不正确")
+                return False
+            
+            print("\n=== 开始加载页面 ===")
+            print("URL: " + url)
             
             # 使用线程加载页面，避免长时间阻塞
             import threading
@@ -231,7 +243,7 @@ class BrowserSimulator:
                                 if self._is_video_url(request_url):
                                     video_count += 1
                                     # 只打印视频请求，减少控制台输出
-                                    print(f"  发现视频请求: {request_url}")
+                                    print("  发现视频请求: " + request_url)
                                     
                                     if request_url not in video_urls_set:
                                         video_urls_set.add(request_url)
@@ -308,7 +320,7 @@ class BrowserSimulator:
                                 'status': 200,
                                 'timestamp': 0
                             })
-                            print(f"  从video标签提取: {video_url}")
+                            print("  从video标签提取: " + video_url)
                 
                 # 提取source标签（只保留包含m3u8、key或getmovie的链接）
                 for source_tag in video_tag.find_all('source'):
@@ -329,7 +341,7 @@ class BrowserSimulator:
                                     'status': 200,
                                     'timestamp': 0
                                 })
-                                print(f"  从source标签提取: {video_url}")
+                                print("  从source标签提取: " + video_url)
             
             # 提取iframe标签（只保留包含m3u8、key或getmovie的链接）
             for iframe_tag in soup.find_all('iframe'):
@@ -354,7 +366,7 @@ class BrowserSimulator:
                                 'status': 200,
                                 'timestamp': 0
                             })
-                            print(f"  从iframe标签提取: {iframe_url}")
+                            print("  从iframe标签提取: " + iframe_url)
             
             # 从JavaScript中提取视频链接
             self._extract_video_from_js(base_url)
@@ -386,7 +398,7 @@ class BrowserSimulator:
                         'status': 200,
                         'timestamp': 0
                     })
-                    print(f"  从JavaScript提取M3U8链接: {m3u8_url}")
+                    print("  从JavaScript提取M3U8链接: " + m3u8_url)
             
             # 提取可能的key文件
             key_pattern = re.compile(r'https?://[^\s"\']+[\w\-./?%&=]*key[\w\-./?%&=]*', re.IGNORECASE)
@@ -401,7 +413,7 @@ class BrowserSimulator:
                         'status': 200,
                         'timestamp': 0
                     })
-                    print(f"  从JavaScript提取key链接: {key_url}")
+                    print("  从JavaScript提取key链接: " + key_url)
             
             # 提取可能的getmovie链接
             getmovie_pattern = re.compile(r'https?://[^\s"\']+[\w\-./?%&=]*getmovie[\w\-./?%&=]*', re.IGNORECASE)
@@ -416,7 +428,7 @@ class BrowserSimulator:
                         'status': 200,
                         'timestamp': 0
                     })
-                    print(f"  从JavaScript提取getmovie链接: {getmovie_url}")
+                    print("  从JavaScript提取getmovie链接: " + getmovie_url)
             
             # 提取可能的JSON格式的getmovie数据
             json_pattern = re.compile(r'\{[^\}]*getmovie[^\}]*\}', re.IGNORECASE)
@@ -441,7 +453,7 @@ class BrowserSimulator:
                                 'timestamp': 0,
                                 'getmovie_data': json_data
                             })
-                            print(f"  从JSON提取M3U8链接: {m3u8_url}")
+                            print("  从JSON提取M3U8链接: " + m3u8_url)
                 except Exception as e:
                     print(f"  解析JSON失败: {e}")
                     

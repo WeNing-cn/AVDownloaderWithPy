@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import concurrent.futures
 import shutil
+import threading
 from urllib.parse import urljoin, urlparse
 from typing import List, Dict, Optional, Callable, Tuple
 from tqdm import tqdm
@@ -24,14 +25,15 @@ class TSMerger:
         self.max_workers = 8  # 并行下载线程数
         self.chunk_size = 1024 * 1024  # 1MB
         self.timeout = 60  # 秒
-        # 固定的 temp 目录
-        self.temp_dir = r"C:\index\temp"
+        # 使用程序所在目录作为临时目录
+        self.temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp")
         # 确保temp目录存在
         os.makedirs(self.temp_dir, exist_ok=True)
         # ffmpeg路径配置
         self.ffmpeg_path = self._find_ffmpeg()
-        # 添加停止标志
+        # 添加停止标志和线程锁
         self.should_stop = False
+        self._stop_lock = threading.Lock()
         # 添加ffmpeg进程跟踪
         self.ffmpeg_process = None
         # 日志回调函数
@@ -44,6 +46,13 @@ class TSMerger:
         self.executor = None
         # 全局请求会话（用于强制中断）
         self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3',
+            'Connection': 'keep-alive'
+        })
+        self.headers = self.session.headers  # 保持兼容性
         # 调试信息
         self.log(f"当前工作目录: {os.getcwd()}")
         self.log(f"系统PATH环境变量: {os.environ.get('PATH', '')}")
@@ -56,12 +65,26 @@ class TSMerger:
             self.log(f"ffmpeg版本检查: {'成功' if result.returncode == 0 else '失败'}")
         except Exception as e:
             self.log(f"验证ffmpeg失败: {e}")
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': '*/*',
-            'Accept-Language': 'zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3',
-            'Connection': 'keep-alive'
-        }
+    
+    def __del__(self):
+        """
+        析构函数：确保资源释放
+        """
+        self.close()
+    
+    def close(self):
+        """
+        关闭TSMerger，释放资源
+        """
+        try:
+            # 关闭downloader
+            if hasattr(self, 'downloader') and self.downloader:
+                self.downloader.close()
+            # 关闭session
+            if hasattr(self, 'session') and self.session:
+                self.session.close()
+        except Exception as e:
+            print(f"[TSMerger] 关闭资源失败: {e}")
     
     def log(self, message, level="INFO"):
         """
@@ -81,7 +104,8 @@ class TSMerger:
         设置停止标志并强制停止所有下载任务
         """
         print("[停止] 设置停止标志")
-        self.should_stop = True
+        with self._stop_lock:
+            self.should_stop = True
         
         # 关闭请求会话，强制中断所有正在进行的requests请求
         if self.session:
@@ -109,6 +133,13 @@ class TSMerger:
         
         print("[停止] 停止信号已发送")
     
+    def is_stopped(self):
+        """
+        检查是否已停止
+        """
+        with self._stop_lock:
+            return self.should_stop
+    
     def get_temp_dir(self) -> str:
         """
         获取临时目录
@@ -119,19 +150,19 @@ class TSMerger:
         """
         自动查找ffmpeg.exe
         按以下顺序查找：
-        1. Utils目录（用户指定的位置）
+        1. Dependence目录（用户指定的位置）
         2. 当前目录（AVDownloader.exe所在目录）
         3. 系统PATH
         """
         import os
         import sys
         
-        # 1. Utils目录（用户指定的位置）
+        # 1. Dependence目录（用户指定的位置）
         current_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-        utils_ffmpeg_path = os.path.join(current_dir, "Utils", "ffmpeg.exe")
-        if os.path.exists(utils_ffmpeg_path):
-            print(f"找到ffmpeg.exe: {utils_ffmpeg_path}")
-            return utils_ffmpeg_path
+        dependence_ffmpeg_path = os.path.join(current_dir, "Dependence", "ffmpeg.exe")
+        if os.path.exists(dependence_ffmpeg_path):
+            print(f"找到ffmpeg.exe: {dependence_ffmpeg_path}")
+            return dependence_ffmpeg_path
         
         # 2. 当前目录
         ffmpeg_path = os.path.join(current_dir, "ffmpeg.exe")
@@ -521,36 +552,49 @@ class TSMerger:
             traceback.print_exc()
             return encrypted_data
     
-    def download_ts_segment(self, ts_url: str, output_path: str, encryption_info: dict = None, segment_index: int = 0) -> bool:
+    def download_ts_segment(self, ts_url: str, output_path: str, encryption_info: dict = None, segment_index: int = 0, max_retries: int = 5) -> bool:
         """
-        下载单个TS分片
+        下载单个TS分片，支持失败重试
+        
+        Args:
+            ts_url: TS分片URL
+            output_path: 输出文件路径
+            encryption_info: 加密信息
+            segment_index: 分片索引
+            max_retries: 最大重试次数，默认5次
+            
+        Returns:
+            下载是否成功
         """
-        # 检查文件是否已存在
+        import time
+        
+        # 检查文件是否已存在且有效
         if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             msg = f"[分片下载] 分片 {segment_index} 已存在，跳过下载"
             print(msg)
             return True
         
         # 检查是否应该停止
-        if self.should_stop:
+        if self.is_stopped():
             msg = f"[分片下载] 收到停止信号，跳过分片 {segment_index}"
             print(msg)
             return False
         
         retries = 0
-        max_retries = 3
+        last_error = None
         
         while retries < max_retries:
             # 再次检查是否应该停止
-            if self.should_stop:
+            if self.is_stopped():
                 msg = f"[分片下载] 收到停止信号，取消分片 {segment_index} 的下载"
                 print(msg)
                 return False
             
             try:
-                msg = f"[分片下载] 开始下载分片 {segment_index}: {ts_url}"
+                msg = f"[分片下载] 开始下载分片 {segment_index} (尝试 {retries + 1}/{max_retries}): {ts_url[:80]}..."
                 print(msg)
                 
+                # 使用session发送请求，支持自动重定向
                 response = self.session.get(
                     ts_url, 
                     headers=self.headers, 
@@ -563,17 +607,27 @@ class TSMerger:
                 # 确保输出目录存在
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
                 
-                # 读取数据
+                # 读取数据（分块读取避免内存问题）
                 data = b''
+                total_size = 0
                 for chunk in response.iter_content(chunk_size=self.chunk_size):
                     # 检查是否应该停止
-                    if self.should_stop:
+                    if self.is_stopped():
                         msg = f"[分片下载] 收到停止信号，取消分片 {segment_index} 的下载"
                         print(msg)
                         return False
                     
                     if chunk:
                         data += chunk
+                        total_size += len(chunk)
+                        
+                        # 防止内存溢出，单个分片不超过100MB
+                        if total_size > 100 * 1024 * 1024:
+                            raise Exception(f"分片大小超过100MB限制 ({total_size} 字节)")
+                
+                # 检查数据是否为空
+                if not data or len(data) == 0:
+                    raise Exception("下载的数据为空")
                 
                 # 如果需要解密
                 if encryption_info and encryption_info['method'] != 'NONE' and encryption_info['key']:
@@ -585,39 +639,54 @@ class TSMerger:
                 with open(output_path, 'wb') as f:
                     f.write(data)
                 
-                # 检查文件大小
-                if os.path.getsize(output_path) == 0:
-                    raise Exception("下载的文件为空")
+                # 验证文件
+                if not os.path.exists(output_path):
+                    raise Exception("文件写入失败，文件不存在")
+                    
+                actual_size = os.path.getsize(output_path)
+                if actual_size == 0:
+                    raise Exception("写入的文件大小为0")
                 
-                msg = f"[分片下载] 分片 {segment_index} 下载成功，大小: {len(data)} 字节"
+                if actual_size != len(data):
+                    raise Exception(f"文件大小不匹配: 期望 {len(data)} 字节，实际 {actual_size} 字节")
+                
+                msg = f"[分片下载] 分片 {segment_index} 下载成功，大小: {actual_size} 字节"
                 print(msg)
                 
                 # 记录已下载的分片
                 if self.state_manager and self.current_task_id:
-                    self.state_manager.add_downloaded_segment(self.current_task_id, segment_index)
+                    try:
+                        self.state_manager.add_downloaded_segment(self.current_task_id, segment_index)
+                    except Exception as e:
+                        print(f"[分片下载] 记录分片状态失败: {e}")
                 
                 return True
                 
             except Exception as e:
                 retries += 1
-                error_msg = f"[分片下载] 下载TS分片失败 {ts_url} (尝试 {retries}/{max_retries}): {e}"
+                last_error = e
+                error_msg = f"[分片下载] 分片 {segment_index} 下载失败 (尝试 {retries}/{max_retries}): {e}"
                 print(error_msg)
                 
                 # 清理失败的文件
                 if os.path.exists(output_path):
                     try:
                         os.remove(output_path)
-                    except:
-                        pass
+                        print(f"[分片下载] 已清理失败的文件: {output_path}")
+                    except Exception as clean_error:
+                        print(f"[分片下载] 清理失败文件时出错: {clean_error}")
                 
-                if retries >= max_retries:
-                    error_msg = f"[分片下载] 分片 {segment_index} 下载失败，已达到最大重试次数"
+                # 如果还有重试次数，等待后重试
+                if retries < max_retries:
+                    # 指数退避策略：1秒, 2秒, 4秒, 8秒...
+                    wait_time = min(2 ** (retries - 1), 30)  # 最多等待30秒
+                    print(f"[分片下载] {wait_time}秒后重试...")
+                    time.sleep(wait_time)
+                else:
+                    # 达到最大重试次数
+                    error_msg = f"[分片下载] 分片 {segment_index} 下载失败，已达到最大重试次数 ({max_retries}次)，最后错误: {last_error}"
                     print(error_msg)
                     return False
-                
-                # 等待一段时间后重试
-                import time
-                time.sleep(1)
         
         return False
     
