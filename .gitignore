@@ -71,11 +71,11 @@ Thumbs.db
 AVDownloader/build/
 AVDownloader/dist/
 AVDownloader/*.exe
+AVDownloader/toUser/
+AVDownloader/zipped/
 AVDownloader/download_state.ini
 AVDownloader/__pycache__/
 *.log
-
-
 
 # Large binary files
 *.exe
