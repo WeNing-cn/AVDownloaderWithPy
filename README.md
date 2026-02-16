@@ -13,6 +13,7 @@
 
 ---
 
+Zip下载:https://github.com/WeNing-cn/AVDownloaderEXE/raw/refs/heads/main/avd.zip
 ## 📖 项目简介
 
 AVDownloader 是一款基于 Python + PyQt5 开发的视频爬取下载工具，支持对网站动态视频资源的自动爬取与本地保存。特别支持 M3U8 播放列表的 TS 分片自动合并、getmovie 链接的处理以及批量 URL 下载管理。
