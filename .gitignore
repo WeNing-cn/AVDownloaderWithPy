@@ -76,6 +76,7 @@ AVDownloader/zipped/
 AVDownloader/download_state.ini
 AVDownloader/__pycache__/
 *.log
+AVDownloaderEXE/
 
 # Large binary files
 *.exe
