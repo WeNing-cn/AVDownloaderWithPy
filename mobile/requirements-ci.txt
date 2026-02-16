@@ -1,3 +1,0 @@
-buildozer
-kivy
-jnius

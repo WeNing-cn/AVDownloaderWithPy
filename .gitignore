@@ -79,7 +79,6 @@ AVDownloader/__pycache__/
 
 # Large binary files
 *.exe
-*.zip
 *.7z
 *.tar.gz
 
